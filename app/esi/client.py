@@ -75,6 +75,31 @@ def _parse_expires(resp: httpx.Response) -> datetime | None:
         return None
 
 
+LOW_BUCKET_SLEEP = 30  # seconds to pause when a rate-limit bucket is nearly empty
+
+
+def rate_limit_low(remaining: str | None, limit: str | None) -> bool:
+    """True when X-Ratelimit-Remaining is under 10% of the bucket (min 10 tokens).
+    `limit` looks like "150/15m"."""
+    if remaining is None or limit is None:
+        return False
+    try:
+        total = int(limit.split("/")[0])
+        return int(remaining) < max(10, total // 10)
+    except ValueError:
+        return False
+
+
+async def _respect_rate_limit(resp: httpx.Response) -> None:
+    rem = resp.headers.get("X-Ratelimit-Remaining")
+    lim = resp.headers.get("X-Ratelimit-Limit")
+    if rate_limit_low(rem, lim):
+        group = resp.headers.get("X-Ratelimit-Group", "?")
+        log.warning("ESI rate-limit bucket '%s' low (%s of %s left); pausing %ss",
+                    group, rem, lim, LOW_BUCKET_SLEEP)
+        await asyncio.sleep(LOW_BUCKET_SLEEP)
+
+
 async def _send(method: str, path: str, *, token: str | None = None,
                 params: dict | None = None, json: Any = None,
                 headers: dict | None = None) -> httpx.Response:
@@ -90,6 +115,9 @@ async def _send(method: str, path: str, *, token: str | None = None,
             reset = int(resp.headers.get("X-ESI-Error-Limit-Reset", "60"))
             log.warning("ESI error limit low (%s), sleeping %ss", remain, reset)
             await asyncio.sleep(reset + 1)
+
+        # New token-bucket limit: ease off before the bucket is empty, not after a 429.
+        await _respect_rate_limit(resp)
 
         if resp.status_code in (420, 429):
             wait = int(resp.headers.get("Retry-After") or resp.headers.get(

@@ -28,6 +28,10 @@ async def lifespan(_app: FastAPI):
     if missing:
         log.error("Missing required settings: %s — the UI will show setup help.", ", ".join(missing))
     log.info("%s %s starting (config dir %s)", APP_NAME, APP_VERSION, settings.config_dir)
+    if not settings.esi_contact:
+        log.warning("ESI_CONTACT is empty. CCP asks every app to send a contact email in its "
+                    "User-Agent so they can reach you before throttling or banning it.")
+    log.info("ESI User-Agent: %s", settings.user_agent)
     scheduler.start()
     bot.start_background()
     yield

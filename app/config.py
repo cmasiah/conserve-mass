@@ -5,7 +5,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_NAME = "Conserve Mass Ops"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 
 
 class Settings(BaseSettings):
@@ -35,6 +35,16 @@ class Settings(BaseSettings):
 
     # GitHub repo checked for new versions (owner/name).
     update_repo: str = "cmasiah/conserve-mass"
+
+    # --- abuse / spam protection ---
+    # Auto-mute an issuer who posts more than this many new contracts within an hour.
+    spam_contracts_per_hour: int = 10
+    # More than this many pending alerts of one kind are merged into a single digest DM.
+    digest_threshold: int = 3
+    # Hard cap on Discord messages per hour; anything beyond waits and gets digested.
+    discord_max_messages_per_hour: int = 30
+    # New location lookups per sync (each unknown structure is one ESI call).
+    max_location_lookups_per_sync: int = 25
 
     @field_validator("corporation_id", "discord_owner_user_id", mode="before")
     @classmethod
@@ -74,8 +84,9 @@ class Settings(BaseSettings):
 
     @property
     def user_agent(self) -> str:
-        contact = f" ({self.esi_contact})" if self.esi_contact else ""
-        return f"ConserveMassOps/{APP_VERSION}{contact}"
+        # CCP asks for app/version plus a contact; email strongly preferred.
+        parts = [p for p in (self.esi_contact, f"+https://github.com/{self.update_repo}") if p]
+        return f"ConserveMassOps/{APP_VERSION} ({'; '.join(parts)})"
 
     def missing_required(self) -> list[str]:
         required = {

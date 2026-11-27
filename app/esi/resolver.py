@@ -1,5 +1,14 @@
-"""Resolve EVE IDs to names, cached in the DB."""
+"""Resolve EVE IDs to names, cached in the DB.
+
+Abuse-safe by design:
+  * names are looked up in batches (one call per 1000 IDs);
+  * a failing batch is retried in chunks, then one by one, keeping errors near the minimum;
+  * IDs that can't be resolved are remembered for 24h instead of retried every sync;
+  * new location lookups are capped per sync via LookupBudget.
+"""
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -12,38 +21,91 @@ from app.models import EntityName, Location
 log = logging.getLogger(__name__)
 
 STATION_ID_MAX = 100_000_000  # NPC stations are below this; Upwell structures are above.
-UNKNOWN_RETRY = timedelta(hours=12)
+UNKNOWN_RETRY = timedelta(hours=12)      # locations we couldn't name (e.g. no docking access)
+UNRESOLVABLE_RETRY = timedelta(hours=24)  # IDs /universe/names rejected
+UNRESOLVABLE = "unresolvable"
+
+
+@dataclass
+class LookupBudget:
+    """Caps how many ESI lookups one sync may spend on new locations."""
+    remaining: int
+
+    def take(self) -> bool:
+        if self.remaining <= 0:
+            return False
+        self.remaining -= 1
+        return True
+
+
+FALLBACK_CHUNK = 25
+
+
+async def isolate_failures(batch: list[int],
+                           lookup: Callable[[list[int]], Awaitable[list[dict]]],
+                           chunk: int = FALLBACK_CHUNK) -> tuple[list[dict], list[int]]:
+    """Resolve a batch. If ESI rejects it (one bad ID fails the whole call), retry in
+    chunks of `chunk`, then one at a time only inside chunks that fail.
+
+    Errors are what count toward CCP's error limit, so this keeps them close to the
+    minimum (1 + failing chunks + bad IDs) while still using few calls.
+    Returns (resolved rows, ids that failed on their own)."""
+    if not batch:
+        return [], []
+    try:
+        return await lookup(batch), []
+    except esi.EsiError:
+        if len(batch) == 1:
+            return [], batch
+    rows: list[dict] = []
+    bad: list[int] = []
+    pieces = [batch[i:i + chunk] for i in range(0, len(batch), chunk)] \
+        if len(batch) > chunk else [[i] for i in batch]
+    for piece in pieces:
+        if len(piece) == 1:
+            try:
+                rows.extend(await lookup(piece))
+            except esi.EsiError:
+                bad.extend(piece)
+        else:
+            r, b = await isolate_failures(piece, lookup, chunk=1)
+            rows.extend(r)
+            bad.extend(b)
+    return rows, bad
+
+
+async def _names_lookup(batch: list[int]) -> list[dict]:
+    return await esi.post("/universe/names", batch)
 
 
 async def resolve_names(db: Session, ids: set[int]) -> dict[int, EntityName]:
     ids = {i for i in ids if i}
     if not ids:
         return {}
-    cached = {e.entity_id: e for e in
-              db.scalars(select(EntityName).where(EntityName.entity_id.in_(ids)))}
-    missing = list(ids - cached.keys())
-
-    async def _lookup(batch: list[int]) -> list[dict]:
-        try:
-            return await esi.post("/universe/names", batch)
-        except esi.EsiError as e:
-            # One invalid ID fails the whole batch; fall back to one at a time.
-            if len(batch) == 1:
-                log.info("Could not resolve id %s: %s", batch[0], e)
-                return []
-            out = []
-            for i in batch:
-                out.extend(await _lookup([i]))
-            return out
+    known = {e.entity_id: e for e in
+             db.scalars(select(EntityName).where(EntityName.entity_id.in_(ids)))}
+    now = utcnow()
+    missing = [i for i in ids
+               if i not in known
+               or (known[i].category == UNRESOLVABLE
+                   and now - known[i].resolved_at > UNRESOLVABLE_RETRY)]
 
     for start in range(0, len(missing), 1000):
-        for row in await _lookup(missing[start:start + 1000]):
-            ent = db.get(EntityName, row["id"]) or EntityName(entity_id=row["id"])
-            ent.name, ent.category, ent.resolved_at = row["name"], row["category"], utcnow()
+        rows, bad = await isolate_failures(missing[start:start + 1000], _names_lookup)
+        for row in rows:
+            ent = known.get(row["id"]) or db.get(EntityName, row["id"]) \
+                or EntityName(entity_id=row["id"])
+            ent.name, ent.category, ent.resolved_at = row["name"], row["category"], now
             db.add(ent)
-            cached[row["id"]] = ent
+            known[row["id"]] = ent
+        for i in bad:
+            log.info("ID %s can't be resolved; won't retry for 24h", i)
+            ent = known.get(i) or db.get(EntityName, i) or EntityName(entity_id=i)
+            ent.name, ent.category, ent.resolved_at = str(i), UNRESOLVABLE, now
+            db.add(ent)
+            known[i] = ent
     db.flush()
-    return cached
+    return {k: v for k, v in known.items() if v.category != UNRESOLVABLE}
 
 
 async def _system(system_id: int) -> tuple[str | None, float | None]:
@@ -54,8 +116,8 @@ async def _system(system_id: int) -> tuple[str | None, float | None]:
         return None, None
 
 
-async def resolve_location(db: Session, location_id: int | None,
-                           token: str | None = None) -> Location | None:
+async def resolve_location(db: Session, location_id: int | None, token: str | None = None,
+                           budget: LookupBudget | None = None) -> Location | None:
     if not location_id:
         return None
     loc = db.get(Location, location_id)
@@ -63,6 +125,8 @@ async def resolve_location(db: Session, location_id: int | None,
         return loc
     if loc and loc.resolved_at and utcnow() - loc.resolved_at < UNKNOWN_RETRY:
         return loc  # recently failed; don't hammer ESI
+    if budget is not None and not budget.take():
+        return loc  # over this sync's budget; try again next sync
 
     loc = loc or Location(location_id=location_id)
     db.add(loc)
