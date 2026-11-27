@@ -7,8 +7,10 @@ cd "$(dirname "$0")"
 
 # Keep this folder's compose file / scripts in sync with GitHub (no git needed).
 RAW=https://raw.githubusercontent.com/cmasiah/conserve-mass/main
-for f in docker-compose.yml update.sh; do
-    if curl -fsSL "$RAW/$f" -o "$f.new"; then mv "$f.new" "$f"; else rm -f "$f.new"; fi
+for pair in docker-compose.yml:docker-compose.yml update.sh:update.sh \
+            unraid/update-watcher.sh:update-watcher.sh; do
+    remote=${pair%%:*}; dest=${pair##*:}
+    if curl -fsSL "$RAW/$remote" -o "$dest.new"; then mv "$dest.new" "$dest"; else rm -f "$dest.new"; fi
 done
 
 echo "==> Pulling latest image"

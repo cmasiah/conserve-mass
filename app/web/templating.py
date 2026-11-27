@@ -6,12 +6,14 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import APP_NAME, APP_VERSION
 from app.models.couriers import WORK_STATUSES
+from app.services import version
 from app.utils import fmt_delta, fmt_dt, fmt_isk, fmt_m3
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters.update(isk=fmt_isk, m3=fmt_m3, dt=fmt_dt, delta=fmt_delta)
 templates.env.globals.update(APP_NAME=APP_NAME, APP_VERSION=APP_VERSION,
-                             WORK_STATUSES=WORK_STATUSES)
+                             WORK_STATUSES=WORK_STATUSES,
+                             version_info=version.cached)  # cached only, never blocks
 
 
 def csrf_token(request: Request) -> str:

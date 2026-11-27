@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.services.backup import run_backup
 from app.services.contract_sync import sync_corporation_contracts
 from app.services.notifier import dispatch_pending
+from app.services.version import version_job
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ def start() -> None:
                       id="contract_sync", next_run_time=datetime.now() + timedelta(seconds=10))
     scheduler.add_job(dispatch_pending, IntervalTrigger(seconds=20), id="notify_dispatch")
     scheduler.add_job(_backup_job, CronTrigger(hour=4, minute=17), id="db_backup")
+    scheduler.add_job(version_job, IntervalTrigger(minutes=30), id="version_check",
+                      next_run_time=datetime.now() + timedelta(seconds=30))
     # Future: industry_jobs_sync, skills_sync, assets_sync register here.
     scheduler.start()
     log.info("Scheduler started (contract poll every %ss)", s.contract_poll_seconds)

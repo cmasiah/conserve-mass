@@ -5,7 +5,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_NAME = "Conserve Mass Ops"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 
 
 class Settings(BaseSettings):
@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     expiry_warning_hours: int = 24
     backup_keep_days: int = 14
     log_level: str = "INFO"
+
+    # GitHub repo checked for new versions (owner/name).
+    update_repo: str = "cmasiah/conserve-mass"
 
     @field_validator("corporation_id", "discord_owner_user_id", mode="before")
     @classmethod
