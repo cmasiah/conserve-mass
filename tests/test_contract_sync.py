@@ -97,6 +97,8 @@ def test_customers_without_deliveries_are_hidden(db):
 def test_version_compare():
     from app.services.version import VersionInfo, parse_version
     assert parse_version("0.10.0") > parse_version("0.9.9")
-    assert VersionInfo(current="0.3.0", latest="0.3.1").update_available
-    assert not VersionInfo(current="0.3.0", latest="0.3.0").update_available
+    assert VersionInfo(current="0.3.0", latest="0.3.1", image_ready=True).update_available
+    assert not VersionInfo(current="0.3.0", latest="0.3.1").update_available  # still building
+    assert VersionInfo(current="0.3.0", latest="0.3.1").building
+    assert not VersionInfo(current="0.3.0", latest="0.3.0", image_ready=True).update_available
     assert not VersionInfo(current="0.3.0", latest=None).update_available

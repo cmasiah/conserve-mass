@@ -22,10 +22,20 @@ class VersionInfo:
     commits: list[dict] = field(default_factory=list)
     checked_at: datetime | None = None
     error: str | None = None
+    image_ready: bool = False  # a built image for `latest` exists on GHCR
+
+    @property
+    def newer(self) -> bool:
+        return bool(self.latest) and parse_version(self.latest) > parse_version(self.current)
 
     @property
     def update_available(self) -> bool:
-        return bool(self.latest) and parse_version(self.latest) > parse_version(self.current)
+        """Only offer an update once GitHub has finished building and publishing it."""
+        return self.newer and self.image_ready
+
+    @property
+    def building(self) -> bool:
+        return self.newer and not self.image_ready
 
 
 _cache = VersionInfo()
@@ -43,6 +53,26 @@ def cached() -> VersionInfo:
     return _cache
 
 
+MANIFEST_TYPES = ", ".join([
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+])
+
+
+async def image_published(client: httpx.AsyncClient, repo: str, tag: str) -> bool:
+    """True if ghcr.io/<repo>:<tag> exists (anonymous pull token; image is public)."""
+    path = repo.lower()
+    t = await client.get("https://ghcr.io/token", params={"scope": f"repository:{path}:pull"})
+    if t.status_code != 200:
+        return False
+    r = await client.head(f"https://ghcr.io/v2/{path}/manifests/{tag}",
+                          headers={"Authorization": f"Bearer {t.json().get('token', '')}",
+                                   "Accept": MANIFEST_TYPES})
+    return r.status_code == 200
+
+
 async def check(force: bool = False) -> VersionInfo:
     global _cache
     if (not force and _cache.checked_at
@@ -50,7 +80,8 @@ async def check(force: bool = False) -> VersionInfo:
         return _cache
 
     repo = get_settings().update_repo
-    info = VersionInfo(latest=_cache.latest, commits=_cache.commits)
+    info = VersionInfo(latest=_cache.latest, commits=_cache.commits,
+                       image_ready=_cache.image_ready)
     headers = {"User-Agent": get_settings().user_agent}
     try:
         async with httpx.AsyncClient(timeout=10, headers=headers) as client:
@@ -59,6 +90,8 @@ async def check(force: bool = False) -> VersionInfo:
             m = _VERSION_RE.search(r.text)
             if m:
                 info.latest = m.group(1)
+            if info.latest and parse_version(info.latest) > parse_version(info.current):
+                info.image_ready = await image_published(client, repo, info.latest)
 
             c = await client.get(f"https://api.github.com/repos/{repo}/commits",
                                  params={"sha": "main", "per_page": 10},

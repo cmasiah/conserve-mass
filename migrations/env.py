@@ -21,6 +21,10 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     with engine.connect() as connection:
+        # Table rebuilds (batch mode) must not trip foreign keys mid-copy. SQLite only
+        # allows changing this outside a transaction, so do it before migrating.
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.commit()
         # render_as_batch: SQLite can't ALTER most things; batch mode recreates tables safely.
         context.configure(connection=connection, target_metadata=target_metadata,
                           render_as_batch=True)
