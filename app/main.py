@@ -15,7 +15,7 @@ from app.esi.client import close_client
 from app.jobs import scheduler
 from app.logbuffer import setup_logging
 from app.security import LoginRequired
-from app.web.routes import auth, logs, pages
+from app.web.routes import auth, industry, logs, pages, settings as settings_routes
 
 settings = get_settings()
 setup_logging(settings)
@@ -69,3 +69,5 @@ def healthz():
 app.include_router(auth.router)
 app.include_router(pages.router)
 app.include_router(logs.router)
+app.include_router(industry.router)
+app.include_router(settings_routes.router)
