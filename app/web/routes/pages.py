@@ -10,15 +10,18 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db, utcnow
 from app.discord_bot import bot
-from app.esi.sso import COURIER_SCOPES, INDUSTRY_SCOPES
+from app.esi.sso import (
+    COURIER_SCOPES, CORP_INDUSTRY_SCOPES, PERSONAL_SCOPES, PROFILE_LABELS, SCOPE_PROFILES,
+)
 from app.models import (
-    Character, Contract, ContractEvent, Corporation, Customer, Notification, SyncState,
+    Character, Contract, ContractEvent, Corporation, Customer, EntityName, Notification,
+    SyncState,
 )
 from app.models.couriers import OPEN_STATUSES, WORK_STATUSES
 from app.security import require_csrf, require_user
 from app.services.backup import run_backup
 from app.services.customers import FINISHED, customer_stats
-from app.services import home as home_svc, updater, version
+from app.services import characters as char_svc, home as home_svc, sync_info, updater, version
 from app.services.notifier import cancel_for_subject, enqueue, group_for_display
 from app.web.templating import flash, render
 
@@ -65,7 +68,8 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     return render(request, "dashboard.html", outstanding=outstanding, in_progress=in_progress,
                   done_30d=done_30d, corp=corp, sync=sync, pending=pending, now=now,
                   bot_ready=bot.is_ready_for_dm(), bot_configured=bot.configured,
-                  hidden_blocked=hidden_blocked, flagged=flagged)
+                  hidden_blocked=hidden_blocked, flagged=flagged,
+                  sync_feeds=sync_info.feeds(db, "contracts", now))
 
 
 @router.get("/contracts")
@@ -183,15 +187,41 @@ def characters(request: Request, db: Session = Depends(get_db)):
     chars = db.scalars(select(Character).order_by(Character.is_admin.desc(),
                                                   Character.name)).all()
     corp = db.scalar(select(Corporation).where(Corporation.is_tracked.is_(True)))
-    return render(request, "characters.html", chars=chars, corp=corp,
-                  courier_scopes=set(COURIER_SCOPES), industry_scopes=set(INDUSTRY_SCOPES))
+    corp_ids = {c.corporation_id for c in chars if c.corporation_id}
+    corp_names = {e.entity_id: e.name for e in db.scalars(
+        select(EntityName).where(EntityName.entity_id.in_(corp_ids)))}
+    return render(request, "characters.html", chars=chars, corp=corp, corp_names=corp_names,
+                  toggles=char_svc.TOGGLES, missing={c.character_id: char_svc.missing_scopes(c)
+                                                     for c in chars},
+                  courier_scopes=set(COURIER_SCOPES), personal_scopes=set(PERSONAL_SCOPES),
+                  corp_scopes=set(CORP_INDUSTRY_SCOPES))
+
+
+@router.post("/characters/{character_id}/track")
+def set_tracking(request: Request, character_id: int, csrf: str = Form(""),
+                 what: str = Form(""), on: str = Form(""), db: Session = Depends(get_db)):
+    require_csrf(request, csrf)
+    char = db.get(Character, character_id)
+    if char is None or what not in char_svc.BY_KEY:
+        raise HTTPException(404)
+    enabled = on == "1"
+    char_svc.set_tracking(db, char, what, enabled)
+    db.commit()
+    flash(request, f"{char.name}: {char_svc.BY_KEY[what].label} "
+                   f"{'on' if enabled else 'off'}.")
+    return _redirect(f"/characters#c{character_id}")
+
+
+def _onboard_profile(value: str | None) -> str:
+    return value if value in ("personal", "industry") else "industry"
 
 
 @router.get("/characters/onboard/start")
-def onboard_start(request: Request):
+def onboard_start(request: Request, profile: str = "industry"):
     """Start bulk linking: every EVE login comes back to the onboarding page."""
-    request.session["onboard"] = {"linked": []}
-    return _redirect("/auth/login?profile=industry")
+    profile = _onboard_profile(profile)
+    request.session["onboard"] = {"linked": [], "profile": profile}
+    return _redirect(f"/auth/login?profile={profile}")
 
 
 @router.get("/characters/onboard")
@@ -199,12 +229,14 @@ def onboard(request: Request, db: Session = Depends(get_db)):
     state = request.session.get("onboard")
     if state is None:
         return _redirect("/characters")
-    need = set(INDUSTRY_SCOPES)
+    profile = _onboard_profile(state.get("profile"))
+    need = set(SCOPE_PROFILES[profile])
     chars = db.scalars(select(Character).order_by(Character.name)).all()
     ready = [c for c in chars if c.token and c.token.is_valid and need <= c.token.scope_set]
     pending = [c for c in chars if c not in ready]
     return render(request, "onboard.html", linked=state.get("linked", []), ready=ready,
-                  pending=pending, total=len(chars))
+                  pending=pending, total=len(chars), profile=profile,
+                  profile_label=PROFILE_LABELS[profile])
 
 
 @router.post("/characters/onboard/stop")
@@ -212,8 +244,9 @@ def onboard_stop(request: Request, csrf: str = Form("")):
     require_csrf(request, csrf)
     state = request.session.pop("onboard", None) or {}
     n = len(state.get("linked", []))
-    flash(request, f"Linked {n} character{'s' if n != 1 else ''}. Industry data syncs within the hour, "
-                   "or use Sync now on the Slots page.")
+    flash(request, f"Linked {n} character{'s' if n != 1 else ''}. Skills and jobs sync within "
+                   "minutes, blueprints within the hour (Sync Now on the Slots page explains the "
+                   "timing).")
     return _redirect("/characters")
 
 
@@ -228,7 +261,8 @@ def set_sync_character(request: Request, character_id: int, csrf: str = Form("")
     else:
         corp.sync_character_id = character_id
         db.commit()
-        flash(request, f"{char.name} will now poll corp contracts.")
+        flash(request, f"{char.name} is now the contract poller: corp contracts are read "
+                       "with its ESI token.")
     return _redirect("/characters")
 
 
@@ -238,9 +272,10 @@ def delete_character(request: Request, character_id: int, csrf: str = Form(""),
     require_csrf(request, csrf)
     char = db.get(Character, character_id)
     if char and character_id != request.session["user"]["character_id"]:
-        db.delete(char)
+        char_svc.remove(db, char)
         db.commit()
-        flash(request, f"Removed {char.name} and its tokens.")
+        flash(request, f"Removed {char.name}, its ESI token and its synced skills, jobs and "
+                       "blueprints. Link it again any time to bring it back.")
     else:
         flash(request, "You can't remove the character you're logged in as.", "error")
     return _redirect("/characters")
@@ -304,11 +339,11 @@ def test_discord(request: Request, csrf: str = Form(""), db: Session = Depends(g
 
 
 @router.post("/system/sync-now")
-def sync_now(request: Request, csrf: str = Form("")):
+def sync_now(request: Request, csrf: str = Form(""), db: Session = Depends(get_db)):
     require_csrf(request, csrf)
     from app.jobs.scheduler import trigger_sync_now
     trigger_sync_now()
-    flash(request, "Sync triggered. ESI caches contracts ~5 minutes, so new ones may lag.")
+    flash(request, sync_info.pressed_message(db, "contracts"))
     return _redirect("/hauling")
 
 

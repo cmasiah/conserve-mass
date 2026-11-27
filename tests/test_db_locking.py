@@ -312,9 +312,9 @@ def test_web_write_is_not_starved_while_a_sync_runs(seeded, fake_esi):
         sync = asyncio.create_task(sync_blueprints())
         await asyncio.sleep(0)  # let the sync start and reach its first ESI wait
         # Same thing the login callback does: write on the event loop's thread pool.
-        name = await asyncio.to_thread(save_login, tok, {"corporation_id": 1}, None, False)
+        saved = await asyncio.to_thread(save_login, tok, {"corporation_id": 1}, None, False)
         await sync
-        return name
+        return saved.name
 
     t0 = time.monotonic()
     assert asyncio.run(scenario()) == "New Pilot"
@@ -336,7 +336,7 @@ def test_login_save_waits_out_a_short_busy_moment(seeded):
     timer = threading.Timer(0.5, hold.rollback)
     timer.start()
     try:
-        assert with_retry(lambda: save_login(tok, {}, None, False)) == "Retry Pilot"
+        assert with_retry(lambda: save_login(tok, {}, None, False)).name == "Retry Pilot"
     finally:
         timer.join()
         hold.close()

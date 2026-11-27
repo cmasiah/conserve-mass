@@ -50,11 +50,11 @@ REACTIONS_PREREQ = "Reactions"   # no reaction jobs at all without it
 CAPITAL_SKILL = "Capital Ship Construction"
 CAPITAL_TIERS = {
     0: "None",
-    1: "Components only",
-    2: "Components only",
+    1: "Components",
+    2: "Components",
     3: "Capital Hulls",
     4: "JF & Supers",
-    5: "Titan",
+    5: "Titans",
 }
 # Remote-start skills: without them, jobs can only be started in your current system.
 REMOTE_SKILLS = {
@@ -151,7 +151,9 @@ def used_slots(jobs: list[IndustryJob]) -> dict[int, dict[str, int]]:
 
 
 def character_overview(db: Session) -> list[CharacterIndustry]:
-    chars = db.scalars(select(Character).order_by(Character.name)).all()
+    """Slot rows for characters with Slots switched on (Characters page)."""
+    chars = db.scalars(select(Character).where(Character.track_slots.is_(True))
+                       .order_by(Character.name)).all()
     name_by_id = {e.entity_id: e.name for e in db.scalars(
         select(EntityName).where(EntityName.name.in_(TRACKED_SKILLS),
                                  EntityName.category == "inventory_type"))}
@@ -192,6 +194,12 @@ def _tokens_with(db: Session, scope: str) -> list[EsiToken]:
             if scope in t.scope_set]
 
 
+def _personal_tokens(db: Session, scope: str, toggle: str) -> list[EsiToken]:
+    """Tokens to use for a character's OWN data, skipping characters switched off for
+    `toggle` on the Characters page (track_skills / track_industry)."""
+    return [t for t in _tokens_with(db, scope) if getattr(t.character, f"track_{toggle}")]
+
+
 async def _corp_token(db: Session, corp_id: int, scope: str) -> str | None:
     """A token from a character in `corp_id` that has `scope` (poller first)."""
     corp = db.get(Corporation, corp_id)
@@ -219,7 +227,7 @@ def _tracked_corp_ids(db: Session) -> list[int]:
 
 async def sync_skills() -> None:
     with session_scope() as db:
-        for tok in _tokens_with(db, SCOPE_SKILLS):
+        for tok in _personal_tokens(db, SCOPE_SKILLS, "skills"):
             cid = tok.character_id
             try:
                 token = await esi.access_token(db, cid)
@@ -245,7 +253,7 @@ async def sync_skills() -> None:
             db.commit()
             log.info("Skills synced for %s (%d skills)", tok.character.name, len(skills))
 
-        for tok in _tokens_with(db, SCOPE_SKILLQUEUE):
+        for tok in _personal_tokens(db, SCOPE_SKILLQUEUE, "skills"):
             cid = tok.character_id
             try:
                 token = await esi.access_token(db, cid)
@@ -320,7 +328,7 @@ def _replace_jobs(db: Session, owner_type: str, owner_id: int, rows: list[dict])
 async def sync_jobs() -> None:
     with session_scope() as db:
         type_ids: set[int] = set()
-        for tok in _tokens_with(db, SCOPE_CHAR_JOBS):
+        for tok in _personal_tokens(db, SCOPE_CHAR_JOBS, "industry"):
             cid = tok.character_id
             try:
                 token = await esi.access_token(db, cid)
@@ -459,7 +467,7 @@ def division_names(db: Session, corp_id: int) -> dict[str, str]:
 async def sync_blueprints() -> None:
     with session_scope() as db:
         type_ids: set[int] = set()
-        for tok in _tokens_with(db, SCOPE_CHAR_BPS):
+        for tok in _personal_tokens(db, SCOPE_CHAR_BPS, "industry"):
             cid = tok.character_id
             try:
                 token = await esi.access_token(db, cid)

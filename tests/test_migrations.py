@@ -56,4 +56,19 @@ def test_0002_survives_linked_contracts_and_failed_0_4_0_leftovers(tmp_path):
     assert db.execute("SELECT name FROM sqlite_master WHERE name LIKE '_alembic_tmp%'"
                       ).fetchall() == []
     assert db.execute("SELECT version_num FROM alembic_version").fetchone()[0] \
-        == "0006_skill_queue_levels"
+        == "0007_character_tracking"
+
+
+def test_0007_turns_tracking_on_for_existing_characters(tmp_path):
+    alembic(tmp_path, "upgrade", "0006_skill_queue_levels")
+    db = sqlite3.connect(tmp_path / "conserve-mass.db")
+    db.execute("INSERT INTO characters (character_id, name, is_admin, created_at, updated_at) "
+               "VALUES (1, 'Old Pilot', 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00')")
+    db.commit()
+    db.close()
+    alembic(tmp_path, "upgrade", "head")
+    alembic(tmp_path, "upgrade", "head")  # idempotent
+    db = sqlite3.connect(tmp_path / "conserve-mass.db")
+    row = db.execute("SELECT track_skills, track_slots, track_industry, track_assets "
+                     "FROM characters").fetchone()
+    assert row == (1, 1, 1, 1)

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/sync.html" import sync_now %}
 {% block title %}Industry Jobs · {{ APP_NAME }}{% endblock %}
 {% block head %}<meta http-equiv="refresh" content="120">{% endblock %}
 {% block content %}
@@ -7,9 +8,7 @@
   <span class="muted">{{ total }} job{{ 's' if total != 1 }}{% if groups | length != total %} · {{ groups | length }} line{{ 's' if groups | length != 1 }}{% endif %}</span>
   {% if ready %}<span class="pill ok">{{ ready }} ready to deliver</span>{% endif %}
   <span class="spacer"></span>
-  <form class="inline" method="post" action="/industry/sync-now">
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/industry/jobs">
-    <button>Sync now</button></form>
+  {{ sync_now(sync_feeds, "/industry/sync-now", csrf, now, back="/industry/jobs") }}
 </div>
 <div class="toolbar">
   <div class="tabs">

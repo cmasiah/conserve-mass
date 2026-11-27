@@ -19,10 +19,10 @@ def test_slot_capacity_matches_skill_rules():
 def test_capital_tiers():
     from app.services.industry import capital_tier
     assert capital_tier({}) == (0, "None")
-    assert capital_tier({"Capital Ship Construction": 1}) == (1, "Components only")
+    assert capital_tier({"Capital Ship Construction": 1}) == (1, "Components")
     assert capital_tier({"Capital Ship Construction": 3}) == (3, "Capital Hulls")
     assert capital_tier({"Capital Ship Construction": 4})[1] == "JF & Supers"
-    assert capital_tier({"Capital Ship Construction": 5})[1] == "Titan"
+    assert capital_tier({"Capital Ship Construction": 5})[1] == "Titans"
 
 
 def test_used_slots_counts_active_jobs_by_category():

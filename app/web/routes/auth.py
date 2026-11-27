@@ -17,7 +17,7 @@ from app.config import get_settings
 from app.db import session_scope, utcnow, with_retry
 from app.esi import client as esi
 from app.esi import sso
-from app.models import Character, Corporation, EsiToken
+from app.models import Character, Corporation, EntityName, EsiToken
 from app.security import encrypt, require_csrf
 from app.web.templating import flash, render
 
@@ -55,6 +55,7 @@ class _Known:
     char_is_admin: bool
     char_corp_id: int | None
     any_admin: bool
+    tracked_corp_id: int | None
 
 
 def _lookup_known(character_id: int) -> _Known:
@@ -65,7 +66,13 @@ def _lookup_known(character_id: int) -> _Known:
             char_is_admin=bool(char and char.is_admin),
             char_corp_id=char.corporation_id if char else None,
             any_admin=db.scalar(select(Character.character_id).where(
-                Character.is_admin.is_(True)).limit(1)) is not None)
+                Character.is_admin.is_(True)).limit(1)) is not None,
+            tracked_corp_id=_current_tracked(db))
+
+
+def _current_tracked(db: Session) -> int | None:
+    return db.scalar(select(Corporation.corporation_id).where(
+        Corporation.is_tracked.is_(True)).limit(1))
 
 
 def _corp_known(corp_id: int) -> bool:
@@ -73,16 +80,17 @@ def _corp_known(corp_id: int) -> bool:
         return db.get(Corporation, corp_id) is not None
 
 
-def _tracked_corp_target(char_corp_id: int | None) -> int | None:
-    """The corporation this login should be tracked under, if any."""
-    s = get_settings()
-    target = s.corporation_id or char_corp_id
+def _tracked_corp_target(char_corp_id: int | None, tracked_corp_id: int | None) -> int | None:
+    """The corporation this login should be tracked under, if any: CORPORATION_ID if set,
+    else the corp already tracked, else (very first login) the character's own corp.
+    Characters from any other corp are linked for personal data only."""
+    target = get_settings().corporation_id or tracked_corp_id or char_corp_id
     return target if target and char_corp_id == target else None
 
 
 def _ensure_tracked_corp(db: Session, char: Character, scopes: list[str],
                          corp_info: dict | None) -> None:
-    target = _tracked_corp_target(char.corporation_id)
+    target = _tracked_corp_target(char.corporation_id, _current_tracked(db))
     if target is None:
         return
     corp = db.get(Corporation, target)
@@ -96,9 +104,15 @@ def _ensure_tracked_corp(db: Session, char: Character, scopes: list[str],
         corp.sync_character_id = char.character_id
 
 
+@dataclass
+class Saved:
+    name: str
+    kept_existing: bool = False  # a narrower re-link didn't replace a broader token
+
+
 def save_login(tok: sso.TokenResult, pub: dict, corp_info: dict | None,
-               make_admin: bool) -> str:
-    """Store the character + its token in one short transaction. Returns the name."""
+               make_admin: bool, corp_name: str | None = None) -> Saved:
+    """Store the character + its token in one short transaction."""
     with session_scope() as db:
         char = db.get(Character, tok.character_id)
         if char is None:
@@ -110,7 +124,19 @@ def save_login(tok: sso.TokenResult, pub: dict, corp_info: dict | None,
         if make_admin:
             char.is_admin = True
 
+        corp_id = char.corporation_id
+        if corp_id and corp_name:
+            ent = db.get(EntityName, corp_id) or EntityName(entity_id=corp_id)
+            ent.name, ent.category, ent.resolved_at = corp_name, "corporation", utcnow()
+            db.add(ent)
+
         token = db.get(EsiToken, char.character_id) or EsiToken(character_id=char.character_id)
+        if token.is_valid and token.scopes and set(tok.scopes) < token.scope_set:
+            # E.g. the director re-linked through "Personal only": keep the broader token
+            # instead of silently losing corp access. (EVE refresh tokens are independent.)
+            db.flush()
+            _ensure_tracked_corp(db, char, sorted(token.scope_set), corp_info)
+            return Saved(char.name, kept_existing=True)
         token.refresh_token_enc = encrypt(tok.refresh_token)
         token.access_token_enc = encrypt(tok.access_token)
         token.access_expires_at = tok.expires_at
@@ -121,7 +147,7 @@ def save_login(tok: sso.TokenResult, pub: dict, corp_info: dict | None,
         db.add(token)
         db.flush()
         _ensure_tracked_corp(db, char, tok.scopes, corp_info)
-        return char.name
+        return Saved(char.name)
 
 
 @router.get("/auth/callback")
@@ -158,7 +184,15 @@ async def callback(request: Request, code: str = "", state: str = ""):
         pub = {}
 
     corp_info = None
-    target = _tracked_corp_target(pub.get("corporation_id", known.char_corp_id))
+    corp_name = None
+    char_corp = pub.get("corporation_id", known.char_corp_id)
+    target = _tracked_corp_target(char_corp, known.tracked_corp_id)
+    if char_corp and target is None:
+        # Another corp (a member linked "Personal only"): fetch its name for display.
+        try:
+            corp_name = (await esi.get(f"/corporations/{char_corp}")).get("name")
+        except (esi.EsiError, httpx.HTTPError):
+            pass
     if target is not None and not await run_in_threadpool(
             with_retry, partial(_corp_known, target), what="login check"):
         try:
@@ -166,10 +200,14 @@ async def callback(request: Request, code: str = "", state: str = ""):
         except (esi.EsiError, httpx.HTTPError) as e:
             log.warning("Could not load corporation %s: %s", target, e)
 
-    name = await run_in_threadpool(
-        with_retry, partial(save_login, tok, pub, corp_info, not logged_in and allowed),
+    saved = await run_in_threadpool(
+        with_retry, partial(save_login, tok, pub, corp_info, not logged_in and allowed,
+                            corp_name),
         what=f"saving login for {tok.character_name}")
-    char = SimpleNamespace(character_id=tok.character_id, name=name)
+    char = SimpleNamespace(character_id=tok.character_id, name=saved.name)
+    if saved.kept_existing:
+        flash(request, f"{saved.name} already had broader access, so its existing token "
+                       f"was kept.")
 
     if logged_in:
         onboard = request.session.get("onboard")
@@ -179,7 +217,8 @@ async def callback(request: Request, code: str = "", state: str = ""):
             onboard["linked"] = [n for n in onboard.get("linked", []) if n != char.name] + [char.name]
             request.session["onboard"] = onboard
             return RedirectResponse("/characters/onboard", status_code=303)
-        flash(request, f"Linked {char.name}.")
+        if not saved.kept_existing:
+            flash(request, f"Linked {char.name}.")
         return RedirectResponse("/characters", status_code=303)
 
     request.session["user"] = {"character_id": char.character_id, "name": char.name}

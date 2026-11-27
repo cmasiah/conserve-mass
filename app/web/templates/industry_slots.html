@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/sync.html" import sync_now %}
 {% block title %}Slots · {{ APP_NAME }}{% endblock %}
 {% macro pips(level, queued=0) -%}
   <span class="pips" aria-label="level {{ level }}{{ ', training to ' ~ queued if queued > level }}">{% for i in range(5) %}<i class="{{ 'on' if i < level else ('q' if i < queued) }}"></i>{% endfor %}</span>
@@ -33,16 +34,14 @@
   <span class="spacer"></span>
   {% if missing %}
   <span class="tip" tabindex="0">
-    <a class="pill warn" href="/auth/login?profile=industry">{{ missing | length }} character{{ 's' if missing | length != 1 }} need{{ 's' if missing | length == 1 }} industry access</a>
+    <a class="pill warn" href="/characters/onboard/start?profile=personal">{{ missing | length }} character{{ 's' if missing | length != 1 }} need{{ 's' if missing | length == 1 }} re-linking</a>
     <span class="tip-body tip-left">
       <span class="tip-head">Re-link while logged in as each character in-game</span>
       {% for c, scopes in missing %}<span class="tip-row"><span>{{ c.name }}</span><span class="tip-note">missing {{ scopes | length }} scope{{ 's' if scopes | length != 1 }}</span></span>{% endfor %}
     </span>
   </span>
   {% endif %}
-  <form class="inline" method="post" action="/industry/sync-now">
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/industry/slots">
-    <button>Sync now</button></form>
+  {{ sync_now(sync_feeds, "/industry/sync-now", csrf, now, back="/industry/slots") }}
 </div>
 
 <div class="grid cmd">
@@ -88,14 +87,17 @@
       <td>{{ slotcell(r, 'science') }}</td>
       <td>{{ slotcell(r, 'reactions') }}</td>
       <td>{% if r.has_skills %}
-            <span class="tip" tabindex="0">
-              {% if r.capital_level %}<span class="pill {{ 'ok' if r.capital_level >= 4 else ('warn' if r.capital_level >= 3 else '') }} small {{ 'cap-titan' if r.capital_level >= 5 }}">{{ r.capital_label }}</span>
-              {% else %}<span class="muted">—</span>{% endif %}
+            {%- set capq = r.queued.get('Capital Ship Construction', 0) %}
+            <span class="tip capcell" tabindex="0">
+              {{ pips(r.capital_level, capq) }}
+              {% if r.capital_level %}<span class="tier {{ 'tier-titan' if r.capital_level >= 5 }}">{{ r.capital_label }}</span>
+              {% else %}<span class="muted small">not trained</span>{% endif %}
+              {% if capq > r.capital_level %}<span class="small q-note">→ {{ capq }}</span>{% endif %}
               <span class="tip-body tip-left">
                 <span class="tip-head">Capital Ship Construction</span>
-                <span class="tip-row"><span>Current level</span>{{ pips(r.capital_level, r.queued.get('Capital Ship Construction', 0)) }}</span>
+                <span class="tip-row"><span>Current level</span>{{ pips(r.capital_level, capq) }}<span class="tip-note">{{ 'training to ' ~ capq if capq > r.capital_level else '' }}</span></span>
                 {% for lvl in [1, 3, 4, 5] %}
-                  <span class="tip-row {{ 'tip-done' if r.capital_level >= lvl else 'muted' }}"><span>Level {{ lvl }}</span><span class="tip-note">{{ tiers[lvl] }}</span></span>
+                  <span class="tip-row {{ 'tip-done' if r.capital_level >= lvl else 'muted' }}"><span>Level {{ lvl }}</span><span></span><span class="tip-note">{{ tiers[lvl] }}</span></span>
                 {% endfor %}
               </span>
             </span>

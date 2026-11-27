@@ -1,0 +1,69 @@
+{#- "Sync Now" with an explanation: the automatic schedule, ESI's cache, and what
+    pressing it actually does. feeds come from app.services.sync_info.feeds(). -#}
+{% macro countdown(label, start, end, now, cls="") -%}
+  {#- A Jobs-style bar that fills up as `end` approaches; sync-timers JS keeps it live. -#}
+  {%- set total = (end - start).total_seconds() if start else 0 -%}
+  {%- set pct = ((now - start).total_seconds() / total * 100) if total > 0 else 0 -%}
+  <span class="sync-timer {{ cls }}" data-start="{{ (start.timestamp() * 1000) | int if start else '' }}"
+        data-end="{{ (end.timestamp() * 1000) | int }}">
+    <span class="sync-timer-top"><span>{{ label }}</span><span class="sync-timer-left">{{ end | delta(now) }}</span></span>
+    <span class="meter"><span style="width: {{ [[pct, 0] | max, 100] | min | round(0) }}%"></span></span>
+  </span>
+{%- endmacro %}
+
+{% macro sync_now(feeds, action, csrf, now, back=None, label="Sync Now") -%}
+<span class="sync-now">
+  <span class="tip sync-hover" tabindex="0">
+    <form class="inline" method="post" action="{{ action }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
+      <button>{{ label }}</button></form>
+    <span class="tip-body tip-text tip-left sync-tip">
+      <span class="tip-head">Syncs on its own</span>
+      {% for f in feeds %}
+        <span class="sync-feed">
+          <span class="sync-name">{{ f.label }} <span class="muted small">· checked {{ f.every_text }}</span>
+            {%- if f.errors %} <span class="pill bad small" title="{{ f.errors[0] }}">error</span>{% endif %}</span>
+          {% if f.next_run %}{{ countdown("Next automatic check", f.next_start, f.next_run, now) }}
+          {% else %}<span class="sync-line muted">Next automatic check: scheduler not running</span>{% endif %}
+          {% if f.cached_until %}{{ countdown("ESI has new data", f.esi_start, f.cached_until, now, "esi") }}
+          {% else %}<span class="sync-line muted">ESI cache expired: the next check gets fresh data</span>{% endif %}
+          {% if f.last_success %}<span class="sync-line muted small">Last pulled {{ f.last_success | delta(now) }}</span>{% endif %}
+        </span>
+      {% endfor %}
+      <span class="tip-head" style="margin-top:4px">What Sync Now does</span>
+      <span class="tip-para">Runs those checks right away instead of waiting for the next one.</span>
+      <span class="tip-head" style="margin-top:4px">What it can't do</span>
+      <span class="tip-para">Beat ESI's cache. CCP serves the same answer for a while
+        ({% for f in feeds %}{{ f.label | lower }} ~{{ f.esi_cache }}{{ ', ' if not loop.last }}{% endfor %}),
+        so pressing it before then changes nothing. Changes made in game show up once that cache refreshes.</span>
+    </span>
+  </span>
+</span>
+<script>
+(() => {
+  // Keep the timer bars live while the page is open (one ticker per page).
+  if (window.__syncTimers) return; window.__syncTimers = true;
+  const fmt = (ms) => {
+    const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600),
+          m = Math.floor((s % 3600) / 60), r = s % 60;
+    return h ? `in ${h}h ${m}m` : (m ? `in ${m}m ${String(r).padStart(2, '0')}s` : `in ${r}s`);
+  };
+  const tick = () => {
+    const now = Date.now();
+    document.querySelectorAll('.sync-timer').forEach((el) => {
+      const end = +el.dataset.end, start = el.dataset.start ? +el.dataset.start : null;
+      const left = el.querySelector('.sync-timer-left'), bar = el.querySelector('.meter > span');
+      if (now >= end) {
+        left.textContent = el.classList.contains('esi') ? 'now' : 'running…';
+        bar.style.width = '100%'; el.classList.add('due');
+        return;
+      }
+      left.textContent = fmt(end - now);
+      if (start && end > start) bar.style.width = `${Math.min(100, (now - start) / (end - start) * 100)}%`;
+    });
+  };
+  tick(); setInterval(tick, 1000);
+})();
+</script>
+{%- endmacro %}
