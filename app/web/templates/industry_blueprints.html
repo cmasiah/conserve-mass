@@ -27,40 +27,50 @@
     Combine identical
   </label>
   <button>Filter</button>
-  {% if groups %}
-  <span class="spacer"></span>
-  <button type="button" class="small" onclick="document.querySelectorAll('details.bp-group').forEach(d => d.open = true)">Expand all</button>
-  <button type="button" class="small" onclick="document.querySelectorAll('details.bp-group').forEach(d => d.open = false)">Collapse all</button>
-  {% endif %}
 </form>
 
-{% for group, g in groups.items() %}
-  <details class="bp-group" {{ 'open' if q or groups | length <= 2 }}>
-    <summary>
-      <svg class="bp-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
-      <span class="bp-title">{{ group }}</span>
-      <span class="pill small">{{ g.total }} blueprint{{ 's' if g.total != 1 }}</span>
-      {% if combine and g.lines | length != g.total %}<span class="small muted">{{ g.lines | length }} unique</span>{% endif %}
-    </summary>
-    <table>
-      <thead><tr><th>Blueprint</th><th>Type</th><th class="num">ME</th><th class="num">TE</th><th class="num">Runs</th><th class="num">Count</th></tr></thead>
+{% for key, g in groups.items() %}
+<section class="fold open" data-fold="bp-{{ key }}">
+  <button type="button" class="fold-head">
+    <svg class="fold-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    <span class="fold-title">{{ g.label }}</span>
+    <span class="pill small">{{ g.total }} blueprint{{ 's' if g.total != 1 }}</span>
+    {% if combine and g.lines | length != g.total %}<span class="small muted">{{ g.lines | length }} unique</span>{% endif %}
+  </button>
+  <div class="fold-body">
+    <table class="sortable">
+      <thead><tr>
+        <th class="num" data-sort="num" data-default="desc">Count</th>
+        <th data-sort="text">Blueprint</th>
+        <th data-sort="text">Type</th>
+        <th class="num" data-sort="num">ME</th>
+        <th class="num" data-sort="num">TE</th>
+        <th class="num" data-sort="num">Runs</th>
+        <th data-sort="text">Held in</th>
+      </tr></thead>
       <tbody>
       {% for it in g.lines %}{% set b = it.b %}
         <tr>
-          <td><img src="https://images.evetech.net/types/{{ b.type_id }}/{{ 'bpc' if b.is_copy else 'bp' }}?size=32" width="24" height="24" style="vertical-align:middle" alt="" loading="lazy"> {{ it.name }}</td>
-          <td>{% if b.is_copy %}<span class="pill small">copy</span>{% else %}<span class="pill ok small">original</span>{% endif %}</td>
-          <td class="num">{{ b.material_efficiency }}</td>
-          <td class="num">{{ b.time_efficiency }}</td>
-          <td class="num">{{ '∞' if not b.is_copy else b.runs }}</td>
-          <td class="num">{% if it.count > 1 %}<span class="bp-count">×{{ it.count }}</span>{% else %}1{% endif %}</td>
+          <td class="num" data-v="{{ it.count }}">{% if it.count > 1 %}<span class="bp-count">×{{ it.count }}</span>{% else %}<span class="bp-count one">1</span>{% endif %}</td>
+          <td data-v="{{ it.name }}"><img src="https://images.evetech.net/types/{{ b.type_id }}/{{ 'bpc' if b.is_copy else 'bp' }}?size=32" width="24" height="24" style="vertical-align:middle" alt="" loading="lazy"> {{ it.name }}</td>
+          <td data-v="{{ 'copy' if b.is_copy else 'original' }}">{% if b.is_copy %}<span class="pill small">copy</span>{% else %}<span class="pill ok small">original</span>{% endif %}</td>
+          <td class="num" data-v="{{ b.material_efficiency }}">{{ b.material_efficiency }}</td>
+          <td class="num" data-v="{{ b.time_efficiency }}">{{ b.time_efficiency }}</td>
+          <td class="num" data-v="{{ 999999 if not b.is_copy else b.runs }}">{{ '∞' if not b.is_copy else b.runs }}</td>
+          {% set places = it.where.most_common() %}
+          <td class="small muted" data-v="{{ places[0][0] if places else '' }}"
+              title="{% for p, n in places %}{{ p }}: {{ n }}{{ '\n' if not loop.last }}{% endfor %}">
+            {{ places[0][0] if places else '' }}{% if places | length > 1 %} <span class="pill small">+{{ places | length - 1 }}</span>{% endif %}</td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
-  </details>
+  </div>
+</section>
 {% else %}
   <div class="card empty">No blueprints{{ ' match "' ~ q ~ '"' if q }}. Corp hangars need
     <code>esi-corporations.read_blueprints.v1</code> on a Director; personal blueprints need
     <code>esi-characters.read_blueprints.v1</code>.</div>
 {% endfor %}
+<script src="/static/tables.js?v={{ ASSET_V }}"></script>
 {% endblock %}

@@ -1,7 +1,7 @@
 """Industry: character skills, industry jobs, blueprints."""
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, UTCDateTime, utcnow
@@ -86,4 +86,6 @@ class SkillQueue(Base):
     current_level: Mapped[int | None] = mapped_column(Integer)
     current_end: Mapped[datetime | None] = mapped_column(UTCDateTime)
     queue_end: Mapped[datetime | None] = mapped_column(UTCDateTime)  # None + length>0 = paused
+    # JSON {skill_id: highest level queued}, for showing queued levels on the Slots page
+    queued: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

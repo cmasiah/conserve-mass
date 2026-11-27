@@ -7,6 +7,7 @@ ESI budget (all calls honour each endpoint's Expires/ETag via sync_state):
   * divisions    1 call per corp, with the blueprint sync
   * names        skill/type IDs resolved once in batches and cached forever
 """
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -49,11 +50,11 @@ REACTIONS_PREREQ = "Reactions"   # no reaction jobs at all without it
 CAPITAL_SKILL = "Capital Ship Construction"
 CAPITAL_TIERS = {
     0: "None",
-    1: "Capital components",
-    2: "Capital components",
-    3: "Most capitals",
-    4: "Jump freighters & supercarriers",
-    5: "Titans",
+    1: "Components only",
+    2: "Components only",
+    3: "Capital Hulls",
+    4: "JF & Supers",
+    5: "Titan",
 }
 # Remote-start skills: without them, jobs can only be started in your current system.
 REMOTE_SKILLS = {
@@ -86,16 +87,23 @@ def slot_capacity(levels: dict[str, int]) -> dict[str, int]:
     return out
 
 
-def slot_breakdown(levels: dict[str, int], cat: str) -> dict:
-    """What a slot count is made of, for the hover on the Slots page."""
+def slot_breakdown(levels: dict[str, int], cat: str,
+                   queued: dict[str, int] | None = None) -> dict:
+    """What a slot count is made of, for the hover on the Slots page.
+    `queued`: skill name -> highest level in the skill queue (shown as queued pips)."""
+    queued = queued or {}
     base, adv = SLOT_SKILLS[cat]
     rows = []
+
+    def row(name, note):
+        return {"name": name, "level": levels.get(name, 0),
+                "queued": max(queued.get(name, 0), levels.get(name, 0)), "note": note}
+
     if cat == "reactions":
-        lvl = levels.get(REACTIONS_PREREQ, 0)
-        rows.append({"name": REACTIONS_PREREQ, "level": lvl,
-                     "note": "required" if lvl else "required — not trained"})
-    rows.append({"name": base, "level": levels.get(base, 0), "note": "+1 slot / level"})
-    rows.append({"name": adv, "level": levels.get(adv, 0), "note": "+1 slot / level"})
+        rows.append(row(REACTIONS_PREREQ, "required" if levels.get(REACTIONS_PREREQ, 0)
+                        else "required — not trained"))
+    rows.append(row(base, "+1 slot / level"))
+    rows.append(row(adv, "+1 slot / level"))
     remote = REMOTE_SKILLS[cat]
     rl = levels.get(remote, 0)
     per = REMOTE_JUMPS_PER_LEVEL.get(remote)
@@ -105,7 +113,8 @@ def slot_breakdown(levels: dict[str, int], cat: str) -> dict:
         reach = f"within {rl * per} jumps"
     else:
         reach = f"level {rl} remote range"
-    return {"rows": rows, "remote": {"name": remote, "level": rl, "reach": reach},
+    return {"rows": rows, "remote": {"name": remote, "level": rl, "reach": reach,
+                                     "queued": max(queued.get(remote, 0), rl)},
             "capacity": slot_capacity(levels)[cat]}
 
 
@@ -124,6 +133,7 @@ class CharacterIndustry:
     capital_level: int = 0
     capital_label: str = "None"
     skills_updated: datetime | None = None
+    queued: dict[str, int] = field(default_factory=dict)   # skill name -> highest queued level
 
     def free(self, cat: str) -> int:
         return max(self.capacity.get(cat, 0) - self.used.get(cat, 0), 0)
@@ -152,6 +162,14 @@ def character_overview(db: Session) -> list[CharacterIndustry]:
         by_char.setdefault(r.character_id, []).append(r)
     any_skill = {cid for (cid,) in db.execute(select(CharacterSkill.character_id).distinct())}
     used = used_slots(db.scalars(select(IndustryJob)).all())
+    queued_by_char: dict[int, dict[str, int]] = {}
+    for q in db.scalars(select(SkillQueue).where(SkillQueue.queued.is_not(None))):
+        try:
+            raw = json.loads(q.queued)
+        except ValueError:
+            continue
+        queued_by_char[q.character_id] = {name_by_id[int(k)]: v for k, v in raw.items()
+                                          if int(k) in name_by_id}
 
     out = []
     for c in chars:
@@ -162,7 +180,8 @@ def character_overview(db: Session) -> list[CharacterIndustry]:
             character=c, has_skills=c.character_id in any_skill, levels=levels,
             capacity=slot_capacity(levels) if c.character_id in any_skill else {},
             used=used.get(c.character_id, {}), capital_level=lvl, capital_label=label,
-            skills_updated=max((s.updated_at for s in skills), default=None)))
+            skills_updated=max((s.updated_at for s in skills), default=None),
+            queued=queued_by_char.get(c.character_id, {})))
     return out
 
 
@@ -264,6 +283,11 @@ def store_skill_queue(db: Session, cid: int, entries: list[dict]) -> SkillQueue:
     row.current_level = cur.get("finished_level") if cur else None
     row.current_end = _parse_dt(cur.get("finish_date")) if cur else None
     row.queue_end = max(finishes) if finishes and len(finishes) == len(live) else None
+    top: dict[str, int] = {}
+    for e in live:
+        k = str(e["skill_id"])
+        top[k] = max(top.get(k, 0), e.get("finished_level") or 0)
+    row.queued = json.dumps(top)
     row.updated_at = now
     db.merge(row)
     return row

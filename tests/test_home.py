@@ -110,3 +110,6 @@ def test_home_widgets(db):
     assert d["idle"][1]["free"]["manufacturing"] == 0
     states = {r["character"].name: r["state"] for r in d["queues"]}
     assert states == {"Idle Ivy": "Empty", "Busy Bob": "Training"}
+    from app.services.industry import character_overview
+    bob = next(r for r in character_overview(db) if r.character.name == "Busy Bob")
+    assert bob.queued == {"Mass Production": 5}              # queued levels feed the Slots pips

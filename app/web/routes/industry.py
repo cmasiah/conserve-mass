@@ -1,4 +1,6 @@
 """Industry pages: slots & skills, job tracker, blueprint library."""
+from collections import Counter
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
@@ -54,12 +56,54 @@ def slots(request: Request, sort: str = "name", only: str = "", db: Session = De
         rows.sort(key=lambda r: (r.capacity.get(sort, 0), r.free(sort)), reverse=True)
     elif sort == "capital":
         rows.sort(key=lambda r: r.capital_level, reverse=True)
-    detail = {r.character.character_id: {c: industry.slot_breakdown(r.levels, c) for c in CATS}
+    detail = {r.character.character_id: {c: industry.slot_breakdown(r.levels, c, r.queued)
+                                         for c in CATS}
               for r in rows if r.has_skills}
     return render(request, "industry_slots.html", rows=rows, sort=sort, only=only, cats=CATS,
                   labels=industry.CATEGORY_LABELS, totals=totals, detail=detail,
                   tracked=len(everyone), synced=len(synced), capital_builders=capital_builders,
                   tiers=industry.CAPITAL_TIERS, missing=_missing_scopes(db), now=utcnow())
+
+
+# Activities whose "product" is itself a blueprint, so the icon must be a blueprint image.
+BLUEPRINT_PRODUCT = {3: "bp", 4: "bp", 5: "bpc", 8: "bpc"}  # TE, ME, copying, invention
+
+
+def job_icon(activity_id: int, product_type_id: int | None, blueprint_type_id: int) -> str:
+    """images.evetech.net path for a job's item. Research/copy/invention produce blueprints,
+    which need the bp/bpc variant (the plain `icon` variant shows the wrong picture)."""
+    variant = BLUEPRINT_PRODUCT.get(activity_id)
+    if variant:
+        return f"types/{product_type_id or blueprint_type_id}/{variant}"
+    return f"types/{product_type_id or blueprint_type_id}/icon"
+
+
+def group_jobs(view: list[dict]) -> list[dict]:
+    """Collapse identical jobs (same activity and item) into one expandable line."""
+    groups: dict[tuple, dict] = {}
+    for v in view:
+        j = v["j"]
+        key = (j.activity_id, j.product_type_id or j.blueprint_type_id)
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {"key": f"{key[0]}-{key[1]}", "what": v["what"],
+                               "icon": v["icon"], "activity": v["activity"], "jobs": []}
+        g["jobs"].append(v)
+    out = []
+    for g in groups.values():
+        jobs = sorted(g["jobs"], key=lambda v: v["j"].end_date)
+        g["jobs"] = jobs
+        g["count"] = len(jobs)
+        g["runs"] = sum(v["j"].runs for v in jobs)
+        g["ready"] = sum(1 for v in jobs if v["done"])
+        g["first_end"] = jobs[0]["j"].end_date
+        g["last_end"] = jobs[-1]["j"].end_date
+        g["pct"] = sum(v["pct"] for v in jobs) / len(jobs)
+        g["who"] = sorted({v["who"] for v in jobs})
+        g["owners"] = sorted({v["owner"] for v in jobs})
+        out.append(g)
+    out.sort(key=lambda g: (g["ready"] == 0, g["first_end"]))
+    return out
 
 
 @router.get("/jobs")
@@ -84,21 +128,28 @@ def jobs(request: Request, cat: str = "", who: int = 0, db: Session = Depends(ge
         view.append({"j": j, "pct": pct, "done": j.end_date <= now or j.status == "ready",
                      "what": names.get(j.product_type_id or j.blueprint_type_id,
                                        f"Type {j.product_type_id or j.blueprint_type_id}"),
+                     "icon": job_icon(j.activity_id, j.product_type_id, j.blueprint_type_id),
                      "who": names.get(j.installer_id, str(j.installer_id)),
                      "activity": industry.ACTIVITY_NAMES.get(j.activity_id,
                                                              f"Activity {j.activity_id}"),
                      "owner": (corps[j.owner_id].ticker or "Corp") if j.owner_type ==
                      "corporation" and j.owner_id in corps else "Personal"})
     ready = sum(1 for v in view if v["done"])
-    return render(request, "industry_jobs.html", rows=view, cat=cat, who=who, cats=CATS,
+    return render(request, "industry_jobs.html", groups=group_jobs(view), total=len(view),
+                  cat=cat, who=who, cats=CATS, labels=industry.CATEGORY_LABELS,
                   installers=installers, ready=ready, now=now)
+
+
+def blueprint_kind(name: str) -> str:
+    """Reaction formulas are all named "... Reaction Formula" in EVE."""
+    return "reactions" if name.endswith("Reaction Formula") else "manufacturing"
 
 
 def aggregate_blueprints(items: list[dict]) -> list[dict]:
     """Merge identical blueprints into one line with a count.
 
     Identical = same type, original/copy, ME, TE and runs. A stacked BPO
-    (quantity > 0) counts as that many blueprints.
+    (quantity > 0) counts as that many blueprints. `where` tallies where they're held.
     """
     merged: dict[tuple, dict] = {}
     for it in items:
@@ -109,9 +160,10 @@ def aggregate_blueprints(items: list[dict]) -> list[dict]:
         if key in merged:
             merged[key]["count"] += n
         else:
-            merged[key] = {**it, "count": n}
+            merged[key] = {**it, "count": n, "where": Counter()}
+        merged[key]["where"][it.get("where", "")] += n
     return sorted(merged.values(),
-                  key=lambda x: (x["name"], x["b"].is_copy, -x["b"].material_efficiency))
+                  key=lambda x: (-x["count"], x["name"], x["b"].is_copy))
 
 
 @router.get("/blueprints")
@@ -133,22 +185,27 @@ def blueprints(request: Request, q: str = "", owner: str = "all", kind: str = "a
 
     corps = {c.corporation_id: c for c in db.scalars(select(Corporation))}
     divs = {cid: industry.division_names(db, cid) for cid in corps}
-    groups: dict[str, list[dict]] = {}
+    sections: dict[str, list[dict]] = {"manufacturing": [], "reactions": []}
     for b in rows:
+        name = names.get(b.type_id, f"Type {b.type_id}")
         if b.owner_type == "corporation":
-            label = divs.get(b.owner_id, {}).get(b.location_flag)
-            group = f"Corp · {label}" if label else f"Corp · {b.location_flag or 'other'}"
+            where = divs.get(b.owner_id, {}).get(b.location_flag) or b.location_flag or "Corp"
         else:
-            group = f"{names.get(b.owner_id, b.owner_id)} · personal"
-        groups.setdefault(group, []).append({
-            "b": b, "name": names.get(b.type_id, f"Type {b.type_id}")})
+            where = f"{names.get(b.owner_id, b.owner_id)} (personal)"
+        sections[blueprint_kind(name)].append({"b": b, "name": name, "where": where})
 
     view = {}
-    for group, items in sorted(groups.items()):
-        lines = aggregate_blueprints(items) if combine else sorted(
-            ({**it, "count": it["b"].quantity if it["b"].quantity > 0 else 1} for it in items),
-            key=lambda x: (x["name"], x["b"].is_copy, -x["b"].material_efficiency))
-        view[group] = {"lines": lines, "total": sum(x["count"] for x in lines)}
+    for key, items in sections.items():
+        if not items:
+            continue
+        if combine:
+            lines = aggregate_blueprints(items)
+        else:
+            lines = [{**it, "count": it["b"].quantity if it["b"].quantity > 0 else 1,
+                      "where": Counter({it["where"]: 1})} for it in items]
+            lines.sort(key=lambda x: (x["name"], x["b"].is_copy))
+        view[key] = {"label": "Reaction formulas" if key == "reactions" else "Manufacturing",
+                     "lines": lines, "total": sum(x["count"] for x in lines)}
     total = sum(g["total"] for g in view.values())
     lines = sum(len(g["lines"]) for g in view.values())
     return render(request, "industry_blueprints.html", groups=view, q=q, owner=owner,

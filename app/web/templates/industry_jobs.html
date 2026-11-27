@@ -4,6 +4,7 @@
 {% block content %}
 <div class="toolbar">
   <h1 style="margin:0">Industry Jobs</h1>
+  <span class="muted">{{ total }} job{{ 's' if total != 1 }}{% if groups | length != total %} · {{ groups | length }} line{{ 's' if groups | length != 1 }}{% endif %}</span>
   {% if ready %}<span class="pill ok">{{ ready }} ready to deliver</span>{% endif %}
   <span class="spacer"></span>
   <form class="inline" method="post" action="/industry/sync-now">
@@ -13,7 +14,7 @@
 <div class="toolbar">
   <div class="tabs">
     <a href="?who={{ who }}" class="{{ 'active' if not cat }}">All</a>
-    {% for c in cats %}<a href="?cat={{ c }}&who={{ who }}" class="{{ 'active' if cat == c }}">{{ c | capitalize }}</a>{% endfor %}
+    {% for c in cats %}<a href="?cat={{ c }}&who={{ who }}" class="{{ 'active' if cat == c }}">{{ labels[c] }}</a>{% endfor %}
   </div>
   <span class="spacer"></span>
   <form method="get">
@@ -24,26 +25,59 @@
     </select>
   </form>
 </div>
-{% if rows %}
-<table>
-  <thead><tr><th>Item</th><th>Activity</th><th class="num">Runs</th><th>Installer</th><th>Owner</th><th>Progress</th><th>Ends</th></tr></thead>
-  <tbody>
-  {% for v in rows %}
-    <tr>
-      <td><img src="https://images.evetech.net/types/{{ v.j.product_type_id or v.j.blueprint_type_id }}/icon?size=32" width="24" height="24" style="vertical-align:middle" alt=""> {{ v.what }}</td>
-      <td>{{ v.activity }}</td>
+{% macro progress(pct, done) -%}
+  <div class="meter {{ 'done' if done }}"><span style="width: {{ pct | round(0) }}%"></span></div>
+  <span class="small muted">{{ pct | round(0) | int }}%</span>
+{%- endmacro %}
+{% if groups %}
+<table class="sortable jobs-table">
+  <thead><tr>
+    <th class="num" data-sort="num" data-default="desc">Count</th>
+    <th data-sort="text">Item</th>
+    <th data-sort="text">Activity</th>
+    <th class="num" data-sort="num">Runs</th>
+    <th data-sort="text">Installer</th>
+    <th data-sort="text">Owner</th>
+    <th data-sort="num">Progress</th>
+    <th data-sort="num" data-default="asc">Ends</th>
+  </tr></thead>
+  {% for g in groups %}
+  {% set multi = g.count > 1 %}
+  <tbody class="grp">
+    <tr class="grp-row {{ 'multi' if multi }}">
+      <td class="num" data-v="{{ g.count }}">
+        {% if multi %}<span class="grp-toggle"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></span><span class="bp-count">×{{ g.count }}</span>
+        {% else %}<span class="bp-count one">1</span>{% endif %}</td>
+      <td data-v="{{ g.what }}"><img src="https://images.evetech.net/{{ g.icon }}?size=32" width="24" height="24" style="vertical-align:middle" alt="" loading="lazy"> {{ g.what }}</td>
+      <td data-v="{{ g.activity }}">{{ g.activity }}</td>
+      <td class="num" data-v="{{ g.runs }}">{{ g.runs }}</td>
+      <td data-v="{{ g.who[0] }}">{{ g.who[0] }}{% if g.who | length > 1 %} <span class="pill small" title="{{ g.who | join(', ') }}">+{{ g.who | length - 1 }}</span>{% endif %}</td>
+      <td class="small" data-v="{{ g.owners | join(', ') }}">{{ g.owners | join(', ') }}</td>
+      <td style="min-width:140px" data-v="{{ g.pct }}">{{ progress(g.pct, g.ready == g.count) }}</td>
+      <td class="small" data-v="{{ g.first_end.timestamp() }}">
+        {% if g.ready == g.count %}<span class="pill ok">{{ 'all ' if multi }}ready</span>
+        {% elif g.ready %}<span class="pill ok">{{ g.ready }} ready</span> rest {{ g.last_end | delta(now) }}
+        {% elif multi and g.first_end != g.last_end %}{{ g.first_end | delta(now) }} – {{ g.last_end | delta(now) }}
+        {% else %}{{ g.first_end | delta(now) }}{% endif %}</td>
+    </tr>
+    {% if multi %}{% for v in g.jobs %}
+    <tr class="grp-item">
+      <td></td>
+      <td class="small muted">job {{ loop.index }} of {{ g.count }}</td>
+      <td class="small muted">{{ v.activity }}</td>
       <td class="num">{{ v.j.runs }}</td>
       <td>{{ v.who }}</td>
       <td class="small">{{ v.owner }}</td>
-      <td style="min-width:140px"><div class="meter {{ 'done' if v.done }}"><span style="width: {{ v.pct | round(0) }}%"></span></div>
-        <span class="small muted">{{ v.pct | round(0) | int }}%</span></td>
+      <td style="min-width:140px">{{ progress(v.pct, v.done) }}</td>
       <td class="small">{% if v.done %}<span class="pill ok">ready</span>{% else %}{{ v.j.end_date | delta(now) }}{% endif %}</td>
     </tr>
-  {% endfor %}
+    {% endfor %}{% endif %}
   </tbody>
+  {% endfor %}
 </table>
 {% else %}
 <div class="card empty">No active industry jobs. Personal jobs need <code>esi-industry.read_character_jobs.v1</code>;
   corp jobs need <code>esi-industry.read_corporation_jobs.v1</code> and the Factory Manager role.</div>
 {% endif %}
+<script src="/static/tables.js?v={{ ASSET_V }}"></script>
 {% endblock %}

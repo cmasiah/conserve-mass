@@ -19,10 +19,10 @@ def test_slot_capacity_matches_skill_rules():
 def test_capital_tiers():
     from app.services.industry import capital_tier
     assert capital_tier({}) == (0, "None")
-    assert capital_tier({"Capital Ship Construction": 1}) == (1, "Capital components")
-    assert capital_tier({"Capital Ship Construction": 3}) == (3, "Most capitals")
-    assert capital_tier({"Capital Ship Construction": 4})[1] == "Jump freighters & supercarriers"
-    assert capital_tier({"Capital Ship Construction": 5})[1] == "Titans"
+    assert capital_tier({"Capital Ship Construction": 1}) == (1, "Components only")
+    assert capital_tier({"Capital Ship Construction": 3}) == (3, "Capital Hulls")
+    assert capital_tier({"Capital Ship Construction": 4})[1] == "JF & Supers"
+    assert capital_tier({"Capital Ship Construction": 5})[1] == "Titan"
 
 
 def test_used_slots_counts_active_jobs_by_category():
@@ -57,7 +57,7 @@ def test_character_overview_reads_skills_and_jobs(db):
     b = rows["Builder"]
     assert b.capacity["manufacturing"] == 11 and b.used["manufacturing"] == 1
     assert b.free("manufacturing") == 10
-    assert b.capital_level == 4 and "Jump freighters" in b.capital_label
+    assert b.capital_level == 4 and b.capital_label == "JF & Supers"
     assert not rows["Fresh Alt"].has_skills  # no data yet, shown as such rather than as 1 slot
 
 
@@ -73,6 +73,34 @@ def test_identical_blueprints_merge_into_one_line_with_count():
     lines = aggregate_blueprints(items)
     assert sorted((x["name"], x["count"]) for x in lines) == [
         ("Charon BPC", 1), ("Charon BPC", 40), ("Rifter BP", 4)]
+    assert lines[0]["count"] == 40                      # most first by default
+
+
+def test_reaction_formulas_are_separated_from_manufacturing():
+    from app.web.routes.industry import blueprint_kind
+    assert blueprint_kind("Fullerides Reaction Formula") == "reactions"
+    assert blueprint_kind("Obelisk Blueprint") == "manufacturing"
+
+
+def test_identical_jobs_group_into_one_line():
+    from app.web.routes.industry import group_jobs, job_icon
+    now = datetime.now(timezone.utc)
+    J = lambda jid, end_h, act=1, prod=20187: SimpleNamespace(
+        job_id=jid, activity_id=act, product_type_id=prod, blueprint_type_id=20188, runs=1,
+        end_date=now + timedelta(hours=end_h))
+    view = [{"j": J(i, i), "pct": 50, "done": False, "what": "Obelisk", "icon": "x",
+             "who": "Builder", "activity": "Manufacturing", "owner": "CMASS"} for i in (3, 1, 2, 4)]
+    view.append({"j": J(9, 5, act=5, prod=20188), "pct": 10, "done": False, "what": "Obelisk BP",
+                 "icon": "y", "who": "Lab", "activity": "Copying", "owner": "Personal"})
+    groups = group_jobs(view)
+    ob = next(g for g in groups if g["what"] == "Obelisk")
+    assert ob["count"] == 4 and ob["runs"] == 4
+    assert [v["j"].job_id for v in ob["jobs"]] == [1, 2, 3, 4]     # soonest first
+    assert len(groups) == 2
+    # Research/copy/invention produce blueprints: use the blueprint picture, not the item icon
+    assert job_icon(5, 20188, 20188) == "types/20188/bpc"
+    assert job_icon(4, 20188, 20188) == "types/20188/bp"
+    assert job_icon(1, 20187, 20188) == "types/20187/icon"
 
 
 def test_slot_breakdown_lists_skills_and_remote_range():
@@ -90,3 +118,6 @@ def test_slot_breakdown_lists_skills_and_remote_range():
     assert slot_breakdown({"Scientific Networking": 3}, "science")["remote"]["reach"] \
         == "within 15 jumps"
     assert slot_breakdown({}, "reactions")["capacity"] == 0     # no Reactions skill
+    # Queued levels are reported separately from trained ones (white vs blue pips)
+    q = slot_breakdown({"Mass Production": 3}, "manufacturing", {"Mass Production": 5})
+    assert (q["rows"][0]["level"], q["rows"][0]["queued"]) == (3, 5)

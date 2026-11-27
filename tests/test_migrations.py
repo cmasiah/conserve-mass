@@ -23,6 +23,7 @@ def test_fresh_database_upgrades_to_head(tmp_path):
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"character_skills", "industry_jobs", "blueprints", "type_info",
             "skill_queues"} <= tables
+    assert "queued" in {r[1] for r in db.execute("PRAGMA table_info(skill_queues)")}
 
 
 def test_0002_survives_linked_contracts_and_failed_0_4_0_leftovers(tmp_path):
@@ -55,4 +56,4 @@ def test_0002_survives_linked_contracts_and_failed_0_4_0_leftovers(tmp_path):
     assert db.execute("SELECT name FROM sqlite_master WHERE name LIKE '_alembic_tmp%'"
                       ).fetchall() == []
     assert db.execute("SELECT version_num FROM alembic_version").fetchone()[0] \
-        == "0005_skill_queue"
+        == "0006_skill_queue_levels"

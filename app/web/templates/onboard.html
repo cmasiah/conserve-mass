@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Bulk link · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Bulk link characters</h1>
+  <span class="spacer"></span>
+  <form class="inline" method="post" action="/characters/onboard/stop">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><button>Finish</button></form>
+</div>
+
+<div class="grid cmd">
+  <div class="card stat"><div class="label">Linked this session</div><div class="value">{{ linked | length }}</div>
+    {% if linked %}<div class="small muted">last: {{ linked[-1] }}</div>{% endif %}</div>
+  <div class="card stat"><div class="label">Industry-ready</div>
+    <div class="value">{{ ready | length }}<span class="small muted"> / {{ total }}</span></div>
+    <div class="meter" style="margin-top:6px"><span style="width: {{ ((ready | length) / total * 100) if total else 0 }}%"></span></div></div>
+  <div class="card stat"><div class="label">Still to link</div><div class="value">{{ pending | length }}</div>
+    <div class="small muted">known characters missing industry access</div></div>
+</div>
+
+<div class="card onboard-next">
+  <a class="btn primary big" id="next" href="/auth/login?profile=industry">Link next character →</a>
+  <label class="small"><input type="checkbox" id="auto"> Continue automatically</label>
+  <span class="small muted" id="countdown"></span>
+  <ol class="small muted">
+    <li>On EVE's page, pick the character and click <strong>Authorize</strong>. You land back here.</li>
+    <li>For characters on another EVE account, use <em>Log in with a different account</em> on EVE's page. Do each account's characters together.</li>
+    <li>With <em>Continue automatically</em> ticked, the next EVE login opens by itself after 3 seconds, so each character is just pick + Authorize.</li>
+  </ol>
+</div>
+
+{% if pending %}
+<h2>Still missing industry access</h2>
+<div class="chips">{% for c in pending %}<span class="chip"><img src="https://images.evetech.net/characters/{{ c.character_id }}/portrait?size=32" alt="">{{ c.name }}</span>{% endfor %}</div>
+<p class="small muted">Characters you haven't linked at all yet won't appear here; just keep linking.</p>
+{% endif %}
+{% if linked %}
+<h2>Linked this session</h2>
+<div class="chips">{% for n in linked %}<span class="chip ok">✓ {{ n }}</span>{% endfor %}</div>
+{% endif %}
+
+<script>
+(() => {
+  const box = document.getElementById('auto'), out = document.getElementById('countdown');
+  let on = false; try { on = localStorage.getItem('cmass.onboard.auto') === '1'; } catch (e) {}
+  box.checked = on;
+  let timer = null;
+  const start = () => {
+    let n = 3;
+    out.textContent = `Opening EVE login in ${n}…`;
+    timer = setInterval(() => {
+      n -= 1;
+      if (n <= 0) { clearInterval(timer); location.href = document.getElementById('next').href; }
+      else out.textContent = `Opening EVE login in ${n}…`;
+    }, 1000);
+  };
+  const stop = () => { clearInterval(timer); out.textContent = ''; };
+  box.addEventListener('change', () => {
+    try { localStorage.setItem('cmass.onboard.auto', box.checked ? '1' : '0'); } catch (e) {}
+    box.checked ? start() : stop();
+  });
+  // Only auto-continue after at least one link, so opening the page never jumps away.
+  if (on && {{ 'true' if linked else 'false' }}) start();
+})();
+</script>
+{% endblock %}

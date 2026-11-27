@@ -5,7 +5,8 @@
   <h1 style="margin:0">Characters</h1>
   <span class="spacer"></span>
   <a class="btn" href="/auth/login?profile=courier">+ Link character</a>
-  <a class="btn" href="/auth/login?profile=industry" title="Grants the scopes the upcoming industry module needs">+ Link with industry scopes</a>
+  <a class="btn" href="/auth/login?profile=industry" title="One character, with the industry scopes">+ Link with industry scopes</a>
+  <a class="btn primary" href="/characters/onboard/start" title="Link many characters in a row, two clicks each">⚡ Bulk link characters</a>
 </div>
 
 <table>
@@ -50,6 +51,5 @@
   {% endfor %}
   </tbody>
 </table>
-<p class="small muted">To fix an invalid token, link the same character again; its token is replaced.
-  Industry, reactions, science-slot and stockpile tracking will use the "industry" scope set.</p>
+<p class="small muted">To fix an invalid token, link the same character again; its token is replaced.</p>
 {% endblock %}
