@@ -1,3 +1,9 @@
+{% macro silenced_pill(cust) -%}
+  {%- if cust and cust.blocked -%}<span class="pill bad small" title="{{ cust.flag_reason or '' }}">blocked</span>
+  {%- elif cust and cust.muted -%}<span class="pill warn small" title="{{ cust.flag_reason or '' }}">muted</span>
+  {%- endif -%}
+{%- endmacro %}
+
 {% macro status_pill(c, now) -%}
   {%- if c.status == 'outstanding' and c.date_expired and c.date_expired < now -%}
     <span class="pill expired">expired</span>
@@ -34,7 +40,8 @@
       <td><a href="/contracts/{{ c.contract_id }}">{{ status_pill(c, now) }}</a></td>
       {% if show_customer %}
       <td><a href="/customers/{{ c.issuer_id }}">{{ c.customer.name if c.customer and c.customer.name else c.issuer_id }}</a>
-        {% if c.customer and c.customer.tag %}<span class="pill small">{{ c.customer.tag }}</span>{% endif %}</td>
+        {% if c.customer and c.customer.tag %}<span class="pill small">{{ c.customer.tag }}</span>{% endif %}
+        {{ silenced_pill(c.customer) }}</td>
       {% endif %}
       <td>{{ place(c.start_location) }}</td>
       <td>{{ place(c.end_location) }}</td>

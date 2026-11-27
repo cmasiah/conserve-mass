@@ -69,6 +69,11 @@
       <dt>SSO callback</dt><dd class="mono">{{ settings.sso_callback_url }}</dd>
       <dt>Config dir</dt><dd class="mono">{{ settings.config_dir }}</dd>
       <dt>Poll interval</dt><dd>{{ settings.contract_poll_seconds }}s</dd>
+      <dt>ESI contact</dt><dd>{% if settings.esi_contact %}<span class="mono">{{ settings.esi_contact }}</span>
+        {% else %}<span class="pill bad">not set</span> <span class="small">add <code>ESI_CONTACT</code> (an email) to <code>.env</code></span>{% endif %}</dd>
+      <dt>Spam protection</dt><dd class="small">auto-mute above {{ settings.spam_contracts_per_hour }} contracts/hour per issuer ·
+        digest above {{ settings.digest_threshold }} alerts · max {{ settings.discord_max_messages_per_hour }} DMs/hour ·
+        {{ settings.max_location_lookups_per_sync }} location lookups/sync</dd>
       <dt>Discord</dt><dd>
         {% if not bot_configured %}<span class="pill bad">not configured</span>
         {% elif bot_ready %}<span class="pill ok">connected</span>
