@@ -7,7 +7,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger, Boolean, Float, ForeignKey, Integer, LargeBinary, String, Text,
-    UniqueConstraint,
+    UniqueConstraint, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -22,6 +22,11 @@ class Character(Base):
     corporation_id: Mapped[int | None] = mapped_column(BigInteger)
     alliance_id: Mapped[int | None] = mapped_column(BigInteger)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # What to sync and show for this character (Characters page toggles). All on by default.
+    track_skills: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    track_slots: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    track_industry: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    track_assets: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 

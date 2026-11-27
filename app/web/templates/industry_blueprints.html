@@ -1,13 +1,12 @@
 {% extends "base.html" %}
+{% from "partials/sync.html" import sync_now %}
 {% block title %}Blueprints · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <div class="toolbar">
   <h1 style="margin:0">Blueprint Library</h1>
   <span class="muted">{{ total }} blueprint{{ 's' if total != 1 }}{% if combine and lines != total %} · {{ lines }} unique{% endif %}</span>
   <span class="spacer"></span>
-  <form class="inline" method="post" action="/industry/sync-now">
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/industry/blueprints">
-    <button>Sync now</button></form>
+  {{ sync_now(sync_feeds, "/industry/sync-now", csrf, now, back="/industry/blueprints") }}
 </div>
 <form method="get" class="toolbar">
   <input type="search" name="q" value="{{ q }}" placeholder="Search blueprints…" style="min-width:260px">

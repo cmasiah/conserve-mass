@@ -3,6 +3,7 @@
 {% block content %}
 <div class="toolbar">
   <h1 style="margin:0">Bulk link characters</h1>
+  <span class="pill {{ 'ok' if profile == 'personal' else 'info' }}">{{ profile_label }}</span>
   <span class="spacer"></span>
   <form class="inline" method="post" action="/characters/onboard/stop">
     <input type="hidden" name="csrf" value="{{ csrf }}"><button>Finish</button></form>
@@ -11,18 +12,20 @@
 <div class="grid cmd">
   <div class="card stat"><div class="label">Linked this session</div><div class="value">{{ linked | length }}</div>
     {% if linked %}<div class="small muted">last: {{ linked[-1] }}</div>{% endif %}</div>
-  <div class="card stat"><div class="label">Industry-ready</div>
+  <div class="card stat"><div class="label">Have {{ 'personal' if profile == 'personal' else 'director' }} access</div>
     <div class="value">{{ ready | length }}<span class="small muted"> / {{ total }}</span></div>
     <div class="meter" style="margin-top:6px"><span style="width: {{ ((ready | length) / total * 100) if total else 0 }}%"></span></div></div>
   <div class="card stat"><div class="label">Still to link</div><div class="value">{{ pending | length }}</div>
-    <div class="small muted">known characters missing industry access</div></div>
+    <div class="small muted">known characters without it</div></div>
 </div>
 
 <div class="card onboard-next">
-  <a class="btn primary big" id="next" href="/auth/login?profile=industry">Link next character →</a>
+  <a class="btn primary big" id="next" href="/auth/login?profile={{ profile }}">Link next character →</a>
   <label class="small"><input type="checkbox" id="auto"> Continue automatically</label>
   <span class="small muted" id="countdown"></span>
   <ol class="small muted">
+    {% if profile == 'personal' %}<li><strong>Personal only:</strong> EVE asks for the character's own skills, jobs, blueprints and assets. Fine for characters in any corp, no roles needed.</li>
+    {% else %}<li><strong>Director:</strong> EVE also asks for Conserve Mass corp data. Use <a href="/characters/onboard/start?profile=personal">Personal only</a> for members and alts in other corps.</li>{% endif %}
     <li>On EVE's page, pick the character and click <strong>Authorize</strong>. You land back here.</li>
     <li>For characters on another EVE account, use <em>Log in with a different account</em> on EVE's page. Do each account's characters together.</li>
     <li>With <em>Continue automatically</em> ticked, the next EVE login opens by itself after 3 seconds, so each character is just pick + Authorize.</li>
@@ -30,7 +33,7 @@
 </div>
 
 {% if pending %}
-<h2>Still missing industry access</h2>
+<h2>Still missing {{ 'personal' if profile == 'personal' else 'director' }} access</h2>
 <div class="chips">{% for c in pending %}<span class="chip"><img src="https://images.evetech.net/characters/{{ c.character_id }}/portrait?size=32" alt="">{{ c.name }}</span>{% endfor %}</div>
 <p class="small muted">Characters you haven't linked at all yet won't appear here; just keep linking.</p>
 {% endif %}

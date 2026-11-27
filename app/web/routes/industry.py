@@ -7,10 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db, utcnow
-from app.esi.sso import INDUSTRY_SCOPES
 from app.models import Blueprint, Character, Corporation, EntityName, EsiToken, IndustryJob
 from app.security import require_csrf, require_user
-from app.services import industry
+from app.services import characters, industry, sync_info
 from app.web.templating import flash, render
 
 router = APIRouter(prefix="/industry", dependencies=[Depends(require_user)])
@@ -27,11 +26,11 @@ def _names(db: Session, ids: set[int]) -> dict[int, str]:
 
 
 def _missing_scopes(db: Session) -> list[tuple[Character, list[str]]]:
+    """Characters missing personal scopes for what they're switched on for. Corp scopes
+    aren't listed: only a director needs those, and members can't grant them anyway."""
     out = []
     for c in db.scalars(select(Character).order_by(Character.name)):
-        tok = db.get(EsiToken, c.character_id)
-        have = tok.scope_set if tok else set()
-        missing = [s for s in INDUSTRY_SCOPES if s not in have]
+        missing = characters.missing_scopes(c)
         if missing:
             out.append((c, missing))
     return out
@@ -62,7 +61,8 @@ def slots(request: Request, sort: str = "name", only: str = "", db: Session = De
     return render(request, "industry_slots.html", rows=rows, sort=sort, only=only, cats=CATS,
                   labels=industry.CATEGORY_LABELS, totals=totals, detail=detail,
                   tracked=len(everyone), synced=len(synced), capital_builders=capital_builders,
-                  tiers=industry.CAPITAL_TIERS, missing=_missing_scopes(db), now=utcnow())
+                  tiers=industry.CAPITAL_TIERS, missing=_missing_scopes(db), now=utcnow(),
+                  sync_feeds=sync_info.feeds(db, "industry"))
 
 
 # Activities whose "product" is itself a blueprint, so the icon must be a blueprint image.
@@ -137,7 +137,8 @@ def jobs(request: Request, cat: str = "", who: int = 0, db: Session = Depends(ge
     ready = sum(1 for v in view if v["done"])
     return render(request, "industry_jobs.html", groups=group_jobs(view), total=len(view),
                   cat=cat, who=who, cats=CATS, labels=industry.CATEGORY_LABELS,
-                  installers=installers, ready=ready, now=now)
+                  installers=installers, ready=ready, now=now,
+                  sync_feeds=sync_info.feeds(db, "industry", now))
 
 
 def blueprint_kind(name: str) -> str:
@@ -209,15 +210,16 @@ def blueprints(request: Request, q: str = "", owner: str = "all", kind: str = "a
     total = sum(g["total"] for g in view.values())
     lines = sum(len(g["lines"]) for g in view.values())
     return render(request, "industry_blueprints.html", groups=view, q=q, owner=owner,
-                  kind=kind, combine=combine, total=total, lines=lines)
+                  kind=kind, combine=combine, total=total, lines=lines, now=utcnow(),
+                  sync_feeds=sync_info.feeds(db, "industry"))
 
 
 @router.post("/sync-now")
-def sync_now(request: Request, csrf: str = Form(""), back: str = Form("/industry/slots")):
+def sync_now(request: Request, csrf: str = Form(""), back: str = Form("/industry/slots"),
+             db: Session = Depends(get_db)):
     require_csrf(request, csrf)
     from app.jobs.scheduler import trigger_industry_now
     trigger_industry_now()
-    flash(request, "Industry sync started. ESI caches skills, jobs and blueprints for a while, "
-                   "so changes may take a few minutes to appear.")
+    flash(request, sync_info.pressed_message(db, "industry"))
     return RedirectResponse(back if back.startswith("/industry") else "/industry/slots",
                             status_code=303)

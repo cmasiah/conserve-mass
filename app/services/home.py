@@ -217,7 +217,8 @@ def idle_characters(db: Session, limit: int = 8) -> list[dict]:
 def skill_queues(db: Session, now: datetime) -> list[dict]:
     """Queue status per character: empty and paused first, then soonest to run out."""
     rows = db.execute(select(SkillQueue, Character).join(
-        Character, Character.character_id == SkillQueue.character_id)).all()
+        Character, Character.character_id == SkillQueue.character_id)
+        .where(Character.track_skills.is_(True))).all()
     names = _names(db, {q.current_skill_id for q, _ in rows})
     out = []
     for q, ch in rows:

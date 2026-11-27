@@ -1,55 +1,121 @@
 {% extends "base.html" %}
 {% block title %}Characters · {{ APP_NAME }}{% endblock %}
+{% macro info(title, left=False) -%}
+  <span class="tip info-tip" tabindex="0"><span class="info-dot" aria-label="What's this?">i</span>
+    <span class="tip-body tip-text {{ 'tip-left' if left }}">{% if title %}<span class="tip-head">{{ title }}</span>{% endif %}{{ caller() }}</span></span>
+{%- endmacro %}
 {% block content %}
 <div class="toolbar">
   <h1 style="margin:0">Characters</h1>
   <span class="spacer"></span>
-  <a class="btn" href="/auth/login?profile=courier">+ Link character</a>
-  <a class="btn" href="/auth/login?profile=industry" title="One character, with the industry scopes">+ Link with industry scopes</a>
-  <a class="btn primary" href="/characters/onboard/start" title="Link many characters in a row, two clicks each">⚡ Bulk link characters</a>
+  <span class="small muted">{{ chars | length }} linked</span>
 </div>
 
-<table>
-  <thead><tr><th>Character</th><th>Corp</th><th>Role</th><th>Token</th><th>Scopes</th><th></th></tr></thead>
+<div class="link-grid">
+  <div class="card link-card">
+    <div class="link-head"><span class="pill ok">Personal only</span>
+      <span class="small muted">any corp · no roles needed</span></div>
+    <p class="small">For alts and members outside Conserve Mass. Reads only that character's
+      <strong>own</strong> skills, skill queue, industry jobs, blueprints and assets. Nothing
+      from its corporation.</p>
+    <div class="link-actions">
+      <a class="btn primary" href="/characters/onboard/start?profile=personal">⚡ Bulk link</a>
+      <a class="btn" href="/auth/login?profile=personal">+ Link one</a>
+    </div>
+  </div>
+  <div class="card link-card">
+    <div class="link-head"><span class="pill info">Director</span>
+      <span class="small muted">Conserve Mass · corp roles</span></div>
+    <p class="small">Everything in Personal, plus corp contracts, corp jobs, corp blueprints,
+      corp assets and hangar names. Corp data only comes through for characters with the
+      in-game roles (Director / Factory Manager).</p>
+    <div class="link-actions">
+      <a class="btn" href="/characters/onboard/start?profile=industry">⚡ Bulk link</a>
+      <a class="btn" href="/auth/login?profile=industry">+ Link one</a>
+      <a class="btn subtle" href="/auth/login?profile=courier" title="Only corp contracts + structure names">Contracts only</a>
+    </div>
+  </div>
+</div>
+
+<table class="chars-table">
+  <thead><tr>
+    <th>Character</th>
+    <th>Corp</th>
+    <th>Access</th>
+    <th>Tracking {% call info("What each switch does") %}
+        {% for t in toggles %}<span class="tip-para"><strong>{{ t.label }}</strong> · {{ t.help }}</span>{% endfor %}
+        <span class="tip-para muted">Click a switch to flip it. Admin or market alts that never build can simply be switched off.</span>
+      {% endcall %}</th>
+    <th>Contract poller {% call info("Contract poller", left=True) %}
+        <span class="tip-para">Corp courier contracts are read from ESI with <strong>one</strong> character's
+          token: the poller. It must be in Conserve Mass and have the corp contracts scope (a
+          Director link).</span>
+        <span class="tip-para"><strong>Make poller</strong> switches which character's token is used. Do it if
+          the current poller's token breaks, it loses its roles, or it leaves corp. The contracts you
+          see don't change.</span>
+      {% endcall %}</th>
+    <th class="col-remove"></th>
+  </tr></thead>
   <tbody>
   {% for ch in chars %}
-    {% set t = ch.token %}
-    <tr>
-      <td><img src="https://images.evetech.net/characters/{{ ch.character_id }}/portrait?size=32" width="24" height="24" style="border-radius:50%;vertical-align:middle" alt="">
-        {{ ch.name }}</td>
-      <td class="small muted">{{ 'Conserve Mass' if corp and ch.corporation_id == corp.corporation_id else ch.corporation_id }}</td>
-      <td>
-        {% if ch.is_admin %}<span class="pill ok">admin</span>{% endif %}
-        {% if corp and corp.sync_character_id == ch.character_id %}<span class="pill in_progress">contract poller</span>{% endif %}
-      </td>
-      <td>
-        {% if t and t.is_valid %}<span class="pill ok">valid</span>
-        {% elif t %}<span class="pill bad" title="{{ t.last_error }}">re-login needed</span>
-        {% else %}<span class="pill bad">none</span>{% endif %}
-      </td>
+    {% set t = ch.token %}{% set has = t.scope_set if t else [] %}
+    {% set miss = missing[ch.character_id] %}
+    {% set in_corp = corp and ch.corporation_id == corp.corporation_id %}
+    <tr id="c{{ ch.character_id }}">
+      <td style="white-space:nowrap"><img src="https://images.evetech.net/characters/{{ ch.character_id }}/portrait?size=32" width="24" height="24" style="border-radius:50%;vertical-align:middle" alt="">
+        {{ ch.name }}
+        {% if ch.is_admin %}<span class="pill ok small">admin</span>{% endif %}</td>
+      <td class="small">{% if in_corp %}{{ corp.name or 'Conserve Mass' }}
+        {% else %}<span class="muted">{{ corp_names.get(ch.corporation_id) or ch.corporation_id or '—' }}</span>{% endif %}</td>
       <td class="small">
-        {% if t %}
-          {% set has = t.scope_set %}
-          {% if courier_scopes <= has %}<span class="pill ok">courier</span>{% endif %}
-          {% if industry_scopes <= has %}<span class="pill ok">industry</span>{% endif %}
-          <details><summary class="muted">{{ has|length }} scopes</summary>
-            {% for s in has|sort %}<div class="mono">{{ s }}</div>{% endfor %}</details>
+        {% if not t %}<span class="pill bad">no token</span>
+        {% elif not t.is_valid %}<span class="pill bad" title="{{ t.last_error }}">re-link needed</span>
+        {% else %}
+          {% if corp_scopes <= has %}<span class="pill info">director</span>
+          {% elif personal_scopes <= has %}<span class="pill ok">personal</span>{% endif %}
+          {% if courier_scopes <= has and not corp_scopes <= has %}<span class="pill">contracts</span>{% endif %}
         {% endif %}
+        {% if t and t.is_valid and miss %}
+          <span class="tip" tabindex="0"><span class="pill warn">needs re-link</span>
+            <span class="tip-body tip-text"><span class="tip-head">Missing {{ miss | length }} scope{{ 's' if miss | length != 1 }}</span>
+              <span class="tip-para">Its switched-on tracking needs scopes this token doesn't have.
+                Link it again with <em>Personal only</em> (or switch those off).</span>
+              {% for s in miss %}<span class="mono">{{ s }}</span>{% endfor %}</span></span>
+        {% endif %}
+        {% if t %}<details class="scopes"><summary class="muted">{{ has | length }} scopes</summary>
+          {% for s in has | sort %}<div class="mono">{{ s }}</div>{% endfor %}</details>{% endif %}
       </td>
-      <td style="white-space:nowrap">
-        {% if corp and ch.corporation_id == corp.corporation_id and corp.sync_character_id != ch.character_id %}
+      <td>
+        <div class="tgl-row">
+        {% for tg in toggles %}{% set on = ch['track_' ~ tg.key] %}
+          <form method="post" action="/characters/{{ ch.character_id }}/track">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="what" value="{{ tg.key }}">
+            <input type="hidden" name="on" value="{{ '0' if on else '1' }}">
+            <button class="tgl {{ 'on' if on else 'off' }}" role="switch" aria-checked="{{ 'true' if on else 'false' }}"
+                    title="{{ tg.label }} {{ 'on' if on else 'off' }} · {{ tg.help }}"><i></i>{{ tg.label }}</button>
+          </form>
+        {% endfor %}
+        </div>
+      </td>
+      <td>
+        {% if corp and corp.sync_character_id == ch.character_id %}<span class="pill in_progress">● polling</span>
+        {% elif in_corp and t and t.is_valid and courier_scopes <= has %}
           <form class="inline" method="post" action="/characters/{{ ch.character_id }}/sync">
-            <input type="hidden" name="csrf" value="{{ csrf }}"><button class="small">Use as poller</button></form>
-        {% endif %}
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="small" title="Read corp contracts with {{ ch.name }}'s token instead">Make poller</button></form>
+        {% else %}<span class="muted small" title="{{ 'Not in Conserve Mass' if not in_corp else 'Needs a Director or Contracts-only link' }}">—</span>{% endif %}
+      </td>
+      <td class="col-remove">
         {% if ch.character_id != user.character_id %}
           <form class="inline" method="post" action="/characters/{{ ch.character_id }}/delete"
                 onsubmit="return confirm('Remove {{ ch.name }} and its ESI token?')">
             <input type="hidden" name="csrf" value="{{ csrf }}"><button class="small danger">Remove</button></form>
-        {% endif %}
+        {% else %}<span class="small muted" title="You can't remove the character you're logged in as">you</span>{% endif %}
       </td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
-<p class="small muted">To fix an invalid token, link the same character again; its token is replaced.</p>
+<p class="small muted">To fix a broken token or add access, link the same character again; its token is
+  replaced. A narrower link (e.g. Personal only on a director) keeps the existing, broader token.</p>
 {% endblock %}

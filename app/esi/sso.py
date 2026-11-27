@@ -20,26 +20,39 @@ TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
 JWKS_URL = "https://login.eveonline.com/oauth/jwks"
 ISSUERS = ("https://login.eveonline.com", "login.eveonline.com")
 
-# Scopes for v1 (courier tracking). Industry scopes are added when those
-# modules ship; the Characters page lets you re-authorize to grant them.
+# Scope sets, by who's linking (EVE shows the list on its consent page):
+#   courier   the contract poller: corp contracts + structure names.
+#   personal  any character, any corp, no roles needed: only its OWN skills, jobs,
+#             blueprints and assets. For alts and members outside Conserve Mass.
+#   industry  a Conserve Mass director: personal + corp jobs/blueprints/assets/divisions
+#             + courier. Corp scopes only return data if the character has the roles.
 COURIER_SCOPES = [
     "esi-contracts.read_corporation_contracts.v1",
     "esi-universe.read_structures.v1",
 ]
-# Planned for the industry module (requested via "Add industry scopes"):
-INDUSTRY_SCOPES = [
-    "esi-industry.read_character_jobs.v1",
-    "esi-industry.read_corporation_jobs.v1",
+PERSONAL_SCOPES = [
     "esi-skills.read_skills.v1",
     "esi-skills.read_skillqueue.v1",
-    "esi-assets.read_assets.v1",
-    "esi-assets.read_corporation_assets.v1",
+    "esi-industry.read_character_jobs.v1",
     "esi-characters.read_blueprints.v1",
+    "esi-assets.read_assets.v1",
+    "esi-universe.read_structures.v1",      # names of structures its jobs/assets sit in
+]
+CORP_INDUSTRY_SCOPES = [
+    "esi-industry.read_corporation_jobs.v1",
+    "esi-assets.read_corporation_assets.v1",
     "esi-corporations.read_blueprints.v1",
     "esi-corporations.read_divisions.v1",   # corp hangar division names
 ]
-SCOPE_PROFILES = {"courier": COURIER_SCOPES, "industry": COURIER_SCOPES + INDUSTRY_SCOPES,
-                  "login": []}
+INDUSTRY_SCOPES = [s for s in PERSONAL_SCOPES if s not in COURIER_SCOPES] + CORP_INDUSTRY_SCOPES
+SCOPE_PROFILES = {
+    "courier": COURIER_SCOPES,
+    "personal": PERSONAL_SCOPES,
+    "industry": COURIER_SCOPES + INDUSTRY_SCOPES,
+    "login": [],
+}
+PROFILE_LABELS = {"personal": "Personal only", "industry": "Director (corp + personal)",
+                  "courier": "Contract poller"}
 
 _jwks_client: PyJWKClient | None = None
 
