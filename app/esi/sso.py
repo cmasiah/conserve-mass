@@ -22,9 +22,9 @@ ISSUERS = ("https://login.eveonline.com", "login.eveonline.com")
 
 # Scope sets, by who's linking (EVE shows the list on its consent page):
 #   courier   the contract poller: corp contracts + structure names.
-#   personal  any character, any corp, no roles needed: only its OWN skills, jobs,
+#   personal  "Member": any character, any corp, no roles needed: only its OWN skills, jobs,
 #             blueprints and assets. For alts and members outside Conserve Mass.
-#   industry  a Conserve Mass director: personal + corp jobs/blueprints/assets/divisions
+#   industry  "Director+": personal + corp jobs/blueprints/assets/divisions
 #             + courier. Corp scopes only return data if the character has the roles.
 COURIER_SCOPES = [
     "esi-contracts.read_corporation_contracts.v1",
@@ -51,8 +51,7 @@ SCOPE_PROFILES = {
     "industry": COURIER_SCOPES + INDUSTRY_SCOPES,
     "login": [],
 }
-PROFILE_LABELS = {"personal": "Personal only", "industry": "Director (corp + personal)",
-                  "courier": "Contract poller"}
+PROFILE_LABELS = {"personal": "Member", "industry": "Director+", "courier": "Contracts only"}
 
 _jwks_client: PyJWKClient | None = None
 

@@ -213,10 +213,11 @@ def _denied_key(scope: str, character_id: int) -> str:
 
 
 def _corp_candidates(db: Session, corp_id: int, scope: str) -> list[EsiToken]:
-    """Tokens from characters in `corp_id` with `scope`, the contract poller first."""
+    """Director+ characters in `corp_id` with `scope`, the contract poller first."""
     corp = db.get(Corporation, corp_id)
     poller = corp.sync_character_id if corp else None
-    cands = [t for t in _tokens_with(db, scope) if t.character.corporation_id == corp_id]
+    cands = [t for t in _tokens_with(db, scope) if t.character.corporation_id == corp_id
+             and t.character.link_role == "director"]   # Members never read corp data
     cands.sort(key=lambda t: t.character_id != poller)
     return cands
 

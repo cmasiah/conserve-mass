@@ -97,18 +97,21 @@ def test_relinking_narrower_keeps_the_broader_token(seeded):
     assert t.scope_set == before and decrypt(t.refresh_token_enc) == "r"
 
 
-def test_personal_link_from_another_corp_records_its_name(seeded):
+def test_member_link_from_another_corp_is_listed_but_not_tracked(seeded):
     from app.esi.sso import PERSONAL_SCOPES, TokenResult
     from app.models import Character, Corporation, EntityName
     from app.web.routes.auth import save_login
     tok = TokenResult(character_id=2112000099, character_name="Outsider", access_token="a",
                       refresh_token="r", expires_at=NOW, scopes=list(PERSONAL_SCOPES))
-    saved = save_login(tok, {"corporation_id": 98777777}, None, False, "Other Corp")
+    saved = save_login(tok, {"corporation_id": 98777777},
+                       {"name": "Other Corp", "ticker": "OTHR"}, False, "personal")
     assert not saved.kept_existing
     seeded.expire_all()
-    assert seeded.get(Character, 2112000099).corporation_id == 98777777
+    ch = seeded.get(Character, 2112000099)
+    assert ch.corporation_id == 98777777 and ch.link_role == "member"
     assert seeded.get(EntityName, 98777777).name == "Other Corp"
-    assert seeded.get(Corporation, 98777777) is None   # never becomes a tracked corp
+    corp = seeded.get(Corporation, 98777777)
+    assert corp.name == "Other Corp" and not corp.is_tracked and not corp.is_home
 
 
 def test_sync_info_reports_schedule_and_esi_cache(seeded):
@@ -160,7 +163,7 @@ def test_characters_page_has_toggles_poller_help_and_remove_last(client):
     for label in ("Skills", "Slots", "Industry", "Assets"):
         assert f"</i>{label}</button>" in html
     assert "Contract poller" in html and "switches which character" in html
-    assert "Personal only" in html and "profile=personal" in html
+    assert "Member" in html and "Director+" in html and "profile=personal" in html
     # Remove is in the last column of the row.
     row = html[html.index(f'id="c{CHARS[1]}"'):]
     row = row[:row.index("</tr>")]
@@ -195,7 +198,7 @@ def test_onboarding_remembers_the_personal_profile(client):
     r = client.get("/characters/onboard/start?profile=personal", follow_redirects=False)
     assert r.headers["location"] == "/auth/login?profile=personal"
     html = client.get("/characters/onboard").text
-    assert "/auth/login?profile=personal" in html and "Personal only" in html
+    assert "/auth/login?profile=personal" in html and "Member" in html
 
 
 def test_remove_asks_for_confirmation_even_with_an_apostrophe_name(client, seeded):
@@ -229,3 +232,96 @@ def test_sync_now_hover_has_live_timer_bars(client, seeded):
     assert ">Sync Now</button>" in html and "Sync now" not in html
     assert 'class="sync-timer esi"' in html and "ESI has new data" in html
     assert "setInterval(tick, 1000)" in html
+
+
+# ------------------------------------------------------------------ corps + roles
+
+def test_corp_switch_off_clears_corp_data_but_not_personal(seeded):
+    from app.models import Blueprint, Corporation, IndustryJob, SyncState
+    from app.services.corps import set_tracked
+    _job(seeded, 31, "corporation", CORP)
+    _job(seeded, 32, "character", CHARS[0])
+    seeded.add(SyncState(key=f"jobs:corp:{CORP}", etag='"x"'))
+    seeded.commit()
+    set_tracked(seeded, seeded.get(Corporation, CORP), False)
+    seeded.commit()
+    assert [j.job_id for j in seeded.scalars(select(IndustryJob))] == [32]
+    assert seeded.get(SyncState, f"jobs:corp:{CORP}") is None
+    assert not seeded.get(Corporation, CORP).is_tracked
+
+
+def test_members_never_read_corp_data_even_with_corp_scopes(seeded, fake_esi):  # noqa: F811
+    from app.models import Character, EsiToken
+    from app.services.industry import sync_jobs
+    t = seeded.get(EsiToken, CHARS[0])
+    t.scopes += " esi-industry.read_corporation_jobs.v1"
+    seeded.get(Character, CHARS[0]).link_role = "member"
+    seeded.commit()
+    fake = fake_esi({"/characters/*/industry/jobs": [],
+                     f"/corporations/{CORP}/industry/jobs": []})
+    asyncio.run(sync_jobs())
+    assert not [c for c in fake.calls if c.startswith("/corporations/")]
+    seeded.get(Character, CHARS[0]).link_role = "director"
+    seeded.commit()
+    asyncio.run(sync_jobs())
+    assert [c for c in fake.calls if c.startswith("/corporations/")]
+
+
+def test_member_link_downgrades_a_director_but_plain_sign_in_does_not(seeded):
+    from app.esi.sso import PERSONAL_SCOPES, TokenResult
+    from app.models import Character, EsiToken
+    from app.web.routes.auth import save_login
+    from app.esi.sso import SCOPE_PROFILES
+    ch = seeded.get(Character, CHARS[0])
+    ch.link_role = "director"
+    seeded.get(EsiToken, CHARS[0]).scopes = " ".join(SCOPE_PROFILES["industry"])
+    seeded.commit()
+    narrow = TokenResult(character_id=CHARS[0], character_name="Pilot 0", access_token="n",
+                         refresh_token="n-r", expires_at=NOW, scopes=list(PERSONAL_SCOPES))
+    assert save_login(narrow, {"corporation_id": CORP}, None, False, "courier").kept_existing
+    saved = save_login(narrow, {"corporation_id": CORP}, None, False, "personal")
+    assert not saved.kept_existing
+    seeded.expire_all()
+    assert seeded.get(Character, CHARS[0]).link_role == "member"
+    assert seeded.get(EsiToken, CHARS[0]).scope_set == set(PERSONAL_SCOPES)
+
+
+def test_contracts_come_from_the_home_corp_only(seeded):
+    from app.models import Corporation
+    from app.services import corps
+    seeded.add(Corporation(corporation_id=1, name="Earlier Row", is_tracked=True))
+    seeded.commit()
+    assert corps.home_corp(seeded).corporation_id == CORP
+
+
+def test_first_corp_becomes_home_and_later_ones_start_off(db):
+    from app.services.corps import ensure_corp
+    from app.models import Corporation
+    for c in db.scalars(select(Corporation)):
+        db.delete(c)
+    db.commit()
+    first, _ = ensure_corp(db, 111, {"name": "Home"})
+    second, _ = ensure_corp(db, 222, {"name": "Other"})
+    assert (first.is_home, first.is_tracked) == (True, True)
+    assert (second.is_home, second.is_tracked) == (False, False)
+
+
+def test_characters_page_lists_corps_with_switch_and_role_toggle(client, seeded):
+    from app.models import Corporation
+    seeded.add(Corporation(corporation_id=98805299, name="Cherry Defence Shipyards",
+                           is_tracked=False))
+    seeded.commit()
+    html = client.get("/characters").text
+    assert 'id="corps"' in html and "Cherry Defence Shipyards" in html
+    assert '<span class="pill ok small">home</span>' in html
+    assert 'action="/corporations/98805299/track"' in html
+    assert f'action="/characters/{CHARS[0]}/role"' in html
+    r = client.post("/corporations/98805299/track", data={"csrf": _csrf(client), "on": "1"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    seeded.expire_all()
+    assert seeded.get(Corporation, 98805299).is_tracked
+    r = client.post(f"/characters/{CHARS[1]}/role", data={"csrf": _csrf(client),
+                                                           "role": "director"},
+                    follow_redirects=False)
+    assert r.status_code == 303

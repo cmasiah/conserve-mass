@@ -366,3 +366,14 @@ table.bp-table { overflow: visible; }
 td.held .held-site { color: var(--text); }
 td.held .tip-body { min-width: 420px; }
 td.held .tip-row { grid-template-columns: 1fr auto 50px; white-space: normal; }
+
+/* Characters: role switch + corporations */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-right: 6px; vertical-align: middle; }
+.seg form { margin: 0; }
+.seg button { border: 0; border-radius: 0; padding: 3px 9px; font-size: 12px; background: none; color: var(--muted); }
+.seg form + form button { border-left: 1px solid var(--line); }
+.seg button.on { background: rgba(79,179,217,.14); color: var(--accent-2); font-weight: 600; cursor: default; }
+.seg button:not(.on):hover { color: var(--text); background: rgba(255,255,255,.04); }
+.corps-table { margin-bottom: 8px; }
+.corps-table td { vertical-align: middle; }
+.warn-text { color: var(--warn); margin-top: 4px; }

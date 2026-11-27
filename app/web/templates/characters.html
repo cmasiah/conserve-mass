@@ -13,7 +13,7 @@
 
 <div class="link-grid">
   <div class="card link-card">
-    <div class="link-head"><span class="pill ok">Personal only</span>
+    <div class="link-head"><span class="pill ok">Member</span>
       <span class="small muted">any corp · no roles needed</span></div>
     <p class="small">For alts and members outside Conserve Mass. Reads only that character's
       <strong>own</strong> skills, skill queue, industry jobs, blueprints and assets. Nothing
@@ -24,11 +24,11 @@
     </div>
   </div>
   <div class="card link-card">
-    <div class="link-head"><span class="pill info">Director</span>
-      <span class="small muted">Conserve Mass · corp roles</span></div>
-    <p class="small">Everything in Personal, plus corp contracts, corp jobs, corp blueprints,
-      corp assets and hangar names. Corp data only comes through for characters with the
-      in-game roles (Director / Factory Manager).</p>
+    <div class="link-head"><span class="pill info">Director+</span>
+      <span class="small muted">corp roles · personal + corp</span></div>
+    <p class="small">Everything a Member grants, plus corp contracts, corp jobs, corp blueprints,
+      corp assets and hangar names. Corp data is only read for corps switched on below, and
+      only comes through if the character has the in-game roles (Director / Factory Manager).</p>
     <div class="link-actions">
       <a class="btn" href="/characters/onboard/start?profile=industry">⚡ Bulk link</a>
       <a class="btn" href="/auth/login?profile=industry">+ Link one</a>
@@ -37,19 +37,56 @@
   </div>
 </div>
 
+<h2 id="corps">Corporations {% call info("Corporations") %}
+    <span class="tip-para">Every corp a linked character belongs to. <strong>Corp data</strong> on means its
+      corp jobs, blueprints and hangars are synced, read through a Director+ character in that corp.</span>
+    <span class="tip-para">Off means none of that corp's data is pulled; anything already pulled is deleted.
+      Its members' own skills, jobs and blueprints still sync (their switches below).</span>
+    <span class="tip-para">Courier contracts are only ever read for the home corp.</span>
+  {% endcall %}</h2>
+<table class="corps-table">
+  <thead><tr><th>Corporation</th><th>Linked characters</th><th>Corp data</th><th>Courier contracts</th></tr></thead>
+  <tbody>
+  {% for c in corp_list %}{% set members = by_corp.get(c.corporation_id, []) %}
+    {% set directors = members | selectattr('link_role', 'equalto', 'director') | list %}
+    <tr>
+      <td><img src="https://images.evetech.net/corporations/{{ c.corporation_id }}/logo?size=32" width="22" height="22" style="vertical-align:middle;border-radius:4px" alt="">
+        {{ c.name or c.corporation_id }}{% if c.ticker %} <span class="muted small">[{{ c.ticker }}]</span>{% endif %}
+        {% if c.is_home %}<span class="pill ok small">home</span>{% endif %}</td>
+      <td class="small">{{ members | length }}{% if members %} <span class="muted">· {{ directors | length }} Director+</span>{% endif %}
+        <div class="muted">{{ members | map(attribute='name') | join(', ') }}</div></td>
+      <td>
+        <form method="post" action="/corporations/{{ c.corporation_id }}/track"
+              {% if c.is_tracked %}data-confirm="Stop syncing {{ c.name or c.corporation_id }}'s corp data?&#10;&#10;Its corp jobs and blueprints already pulled in will be deleted. Members' personal data keeps syncing. You can switch it back on any time." onsubmit="return confirm(this.dataset.confirm)"{% endif %}>
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="on" value="{{ '0' if c.is_tracked else '1' }}">
+          <button class="tgl {{ 'on' if c.is_tracked else 'off' }}" role="switch" aria-checked="{{ 'true' if c.is_tracked else 'false' }}"><i></i>{{ 'Syncing' if c.is_tracked else 'Off' }}</button>
+        </form>
+        {% if c.is_tracked and not directors %}<div class="small warn-text">No Director+ character here, so there's nothing to read it with.</div>{% endif %}
+      </td>
+      <td class="small">{% if c.is_home %}Polled{% set p = (members | selectattr('character_id', 'equalto', c.sync_character_id) | list) %}{% if p %} by {{ p[0].name }}{% endif %}
+        {% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+  {% else %}<tr><td colspan="4" class="muted">No corporations yet.</td></tr>{% endfor %}
+  </tbody>
+</table>
+
+<h2>Characters</h2>
 <table class="chars-table">
   <thead><tr>
     <th>Character</th>
     <th>Corp</th>
-    <th>Access</th>
+    <th>Role {% call info("Member or Director+") %}
+        <span class="tip-para"><strong>Member</strong> · only the character's own data is read, whatever scopes it granted.</span>
+        <span class="tip-para"><strong>Director+</strong> · its token may also read corp data for its corp (if that corp is switched on).</span>
+        <span class="tip-para muted">Switching here is instant. Going to Director+ needs the corp scopes, which a Director+ link grants.</span>
+      {% endcall %}</th>
     <th>Tracking {% call info("What each switch does") %}
         {% for t in toggles %}<span class="tip-para"><strong>{{ t.label }}</strong> · {{ t.help }}</span>{% endfor %}
         <span class="tip-para muted">Click a switch to flip it. Admin or market alts that never build can simply be switched off.</span>
       {% endcall %}</th>
     <th>Contract poller {% call info("Contract poller", left=True) %}
         <span class="tip-para">Corp courier contracts are read from ESI with <strong>one</strong> character's
-          token: the poller. It must be in Conserve Mass and have the corp contracts scope (a
-          Director link).</span>
+          token: the poller. It must be in the home corp and have the corp contracts scope (a Director+ link).</span>
         <span class="tip-para"><strong>Make poller</strong> switches which character's token is used. Do it if
           the current poller's token breaks, it loses its roles, or it leaves corp. The contracts you
           see don't change.</span>
@@ -68,18 +105,22 @@
       <td class="small">{% if in_corp %}{{ corp.name or 'Conserve Mass' }}
         {% else %}<span class="muted">{{ corp_names.get(ch.corporation_id) or ch.corporation_id or '—' }}</span>{% endif %}</td>
       <td class="small">
+        {% set is_dir = ch.link_role == 'director' %}
+        <div class="seg">
+          {% for r, label in [('member', 'Member'), ('director', 'Director+')] %}
+            <form method="post" action="/characters/{{ ch.character_id }}/role">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="role" value="{{ r }}">
+              <button class="{{ 'on' if ch.link_role == r }}" {{ 'disabled' if ch.link_role == r }}>{{ label }}</button></form>
+          {% endfor %}
+        </div>
         {% if not t %}<span class="pill bad">no token</span>
         {% elif not t.is_valid %}<span class="pill bad" title="{{ t.last_error }}">re-link needed</span>
-        {% else %}
-          {% if corp_scopes <= has %}<span class="pill info">director</span>
-          {% elif personal_scopes <= has %}<span class="pill ok">personal</span>{% endif %}
-          {% if courier_scopes <= has and not corp_scopes <= has %}<span class="pill">contracts</span>{% endif %}
-        {% endif %}
+        {% elif is_dir and not corp_scopes <= has %}<a class="pill warn" href="/auth/login?profile=industry" title="Director+ needs the corp scopes: link this character again with Director+">re-link as Director+</a>{% endif %}
         {% if t and t.is_valid and miss %}
           <span class="tip" tabindex="0"><span class="pill warn">needs re-link</span>
             <span class="tip-body tip-text"><span class="tip-head">Missing {{ miss | length }} scope{{ 's' if miss | length != 1 }}</span>
               <span class="tip-para">Its switched-on tracking needs scopes this token doesn't have.
-                Link it again with <em>Personal only</em> (or switch those off).</span>
+                Link it again as a <em>Member</em> (or switch those off).</span>
               {% for s in miss %}<span class="mono">{{ s }}</span>{% endfor %}</span></span>
         {% endif %}
         {% if t %}<details class="scopes"><summary class="muted">{{ has | length }} scopes</summary>
@@ -103,7 +144,7 @@
           <form class="inline" method="post" action="/characters/{{ ch.character_id }}/sync">
             <input type="hidden" name="csrf" value="{{ csrf }}">
             <button class="small" title="Read corp contracts with {{ ch.name }}'s token instead">Make poller</button></form>
-        {% else %}<span class="muted small" title="{{ 'Not in Conserve Mass' if not in_corp else 'Needs a Director or Contracts-only link' }}">—</span>{% endif %}
+        {% else %}<span class="muted small" title="{{ 'Not in Conserve Mass' if not in_corp else 'Needs a Director+ or Contracts-only link' }}">—</span>{% endif %}
       </td>
       <td class="col-remove">
         {% if ch.character_id != user.character_id %}
@@ -120,5 +161,5 @@
   </tbody>
 </table>
 <p class="small muted">To fix a broken token or add access, link the same character again; its token is
-  replaced. A narrower link (e.g. Personal only on a director) keeps the existing, broader token.</p>
+  replaced. Linking as Member removes corp access from its token; a plain sign-in never shrinks it.</p>
 {% endblock %}
