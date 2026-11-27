@@ -107,8 +107,11 @@
       </td>
       <td class="col-remove">
         {% if ch.character_id != user.character_id %}
+          {#- The text goes in a data attribute, not inside the JS: EVE names can contain
+              apostrophes, which would break an inline string and skip the confirmation. -#}
           <form class="inline" method="post" action="/characters/{{ ch.character_id }}/delete"
-                onsubmit="return confirm('Remove {{ ch.name }} and its ESI token?')">
+                data-confirm="Remove {{ ch.name }}?&#10;&#10;This deletes its ESI token and its synced skills, jobs and blueprints.{{ ' It is the contract poller, so contract syncing stops until you make another character the poller.' if corp and corp.sync_character_id == ch.character_id }}&#10;&#10;You can link it again later."
+                onsubmit="return confirm(this.dataset.confirm)">
             <input type="hidden" name="csrf" value="{{ csrf }}"><button class="small danger">Remove</button></form>
         {% else %}<span class="small muted" title="You can't remove the character you're logged in as">you</span>{% endif %}
       </td>

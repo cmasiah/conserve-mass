@@ -188,7 +188,7 @@ def test_slots_page_shows_capital_pips_tier_and_sync_help(client, seeded):
     html = client.get("/industry/slots").text
     assert '<span class="tier ">JF &amp; Supers</span>' in html
     assert 'class="tip capcell"' in html
-    assert "What Sync now does" in html and "Beat ESI" in html
+    assert "What Sync Now does" in html and "Beat ESI" in html
 
 
 def test_onboarding_remembers_the_personal_profile(client):
@@ -196,3 +196,36 @@ def test_onboarding_remembers_the_personal_profile(client):
     assert r.headers["location"] == "/auth/login?profile=personal"
     html = client.get("/characters/onboard").text
     assert "/auth/login?profile=personal" in html and "Personal only" in html
+
+
+def test_remove_asks_for_confirmation_even_with_an_apostrophe_name(client, seeded):
+    from app.models import Character
+    seeded.get(Character, CHARS[1]).name = "Ma'at O'Neil"
+    seeded.commit()
+    html = client.get("/characters").text
+    assert 'onsubmit="return confirm(this.dataset.confirm)"' in html
+    assert "data-confirm=\"Remove Ma&#39;at O&#39;Neil?" in html
+
+
+def test_remove_clears_personal_jobs_but_keeps_corp_jobs(client, seeded):
+    from app.models import Character, IndustryJob
+    _job(seeded, 11, "character", CHARS[1])
+    _job(seeded, 12, "corporation", CORP)
+    seeded.commit()
+    r = client.post(f"/characters/{CHARS[1]}/delete", data={"csrf": _csrf(client)},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    seeded.expire_all()
+    assert seeded.get(Character, CHARS[1]) is None
+    assert [j.job_id for j in seeded.scalars(select(IndustryJob))] == [12]
+
+
+def test_sync_now_hover_has_live_timer_bars(client, seeded):
+    from app.models import SyncState
+    seeded.add(SyncState(key="jobs:char:1", expires_at=NOW + timedelta(minutes=3),
+                         last_success_at=NOW - timedelta(minutes=2)))
+    seeded.commit()
+    html = client.get("/industry/jobs").text
+    assert ">Sync Now</button>" in html and "Sync now" not in html
+    assert 'class="sync-timer esi"' in html and "ESI has new data" in html
+    assert "setInterval(tick, 1000)" in html

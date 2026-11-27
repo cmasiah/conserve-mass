@@ -245,7 +245,7 @@ def onboard_stop(request: Request, csrf: str = Form("")):
     state = request.session.pop("onboard", None) or {}
     n = len(state.get("linked", []))
     flash(request, f"Linked {n} character{'s' if n != 1 else ''}. Skills and jobs sync within "
-                   "minutes, blueprints within the hour (Sync now on the Slots page explains the "
+                   "minutes, blueprints within the hour (Sync Now on the Slots page explains the "
                    "timing).")
     return _redirect("/characters")
 
@@ -272,9 +272,10 @@ def delete_character(request: Request, character_id: int, csrf: str = Form(""),
     require_csrf(request, csrf)
     char = db.get(Character, character_id)
     if char and character_id != request.session["user"]["character_id"]:
-        db.delete(char)
+        char_svc.remove(db, char)
         db.commit()
-        flash(request, f"Removed {char.name} and its tokens.")
+        flash(request, f"Removed {char.name}, its ESI token and its synced skills, jobs and "
+                       "blueprints. Link it again any time to bring it back.")
     else:
         flash(request, "You can't remove the character you're logged in as.", "error")
     return _redirect("/characters")

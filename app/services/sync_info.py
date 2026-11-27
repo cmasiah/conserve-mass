@@ -1,9 +1,9 @@
-"""What 'Sync now' does and when data refreshes on its own.
+"""What 'Sync Now' does and when data refreshes on its own.
 
 Two clocks decide when new data shows up:
   * our schedule: how often the app asks ESI (Settings, defaults below);
   * ESI's cache: how long CCP serves the same answer. Asking again sooner returns the
-    same data, so neither the schedule nor Sync now can beat it.
+    same data, so neither the schedule nor Sync Now can beat it.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -28,6 +28,21 @@ class Feed:
     cached_until: datetime | None = None   # ESI serves the same data until this time
     last_success: datetime | None = None
     errors: list[str] = field(default_factory=list)
+    esi_window: timedelta = timedelta(minutes=5)  # typical cache length, if no pull is known
+
+    @property
+    def next_start(self) -> datetime | None:
+        """When the current wait for the next automatic check began (for the timer bar)."""
+        return self.next_run - self.every if self.next_run else None
+
+    @property
+    def esi_start(self) -> datetime | None:
+        """Start of ESI's current cache window: our last pull, if it's inside the window."""
+        if not self.cached_until:
+            return None
+        if self.last_success and self.last_success < self.cached_until:
+            return self.last_success
+        return self.cached_until - self.esi_window
 
     @property
     def every_text(self) -> str:
@@ -44,14 +59,16 @@ def _feeds(kind: str) -> list[Feed]:
     s = get_settings()
     if kind == "contracts":
         return [Feed("Corp contracts", "contract_sync", timedelta(seconds=s.contract_poll_seconds),
-                     "5 min", ("corp_contracts:",))]
+                     "5 min", ("corp_contracts:",), esi_window=timedelta(minutes=5))]
     return [
         Feed("Skills & queues", "industry_skills",
-             timedelta(minutes=s.industry_skills_poll_minutes), "2 min", ("skills:", "skillqueue:")),
+             timedelta(minutes=s.industry_skills_poll_minutes), "2 min", ("skills:", "skillqueue:"),
+             esi_window=timedelta(minutes=2)),
         Feed("Industry jobs", "industry_jobs",
-             timedelta(minutes=s.industry_jobs_poll_minutes), "5 min", ("jobs:",)),
+             timedelta(minutes=s.industry_jobs_poll_minutes), "5 min", ("jobs:",), esi_window=timedelta(minutes=5)),
         Feed("Blueprints", "industry_blueprints",
-             timedelta(minutes=s.industry_blueprints_poll_minutes), "1 hour", ("bps:", "divisions:")),
+             timedelta(minutes=s.industry_blueprints_poll_minutes), "1 hour", ("bps:", "divisions:"),
+             esi_window=timedelta(hours=1)),
     ]
 
 
@@ -82,7 +99,7 @@ def feeds(db: Session, kind: str, now: datetime | None = None) -> list[Feed]:
 
 
 def pressed_message(db: Session, kind: str) -> str:
-    """Flash text after Sync now: what will and won't happen."""
+    """Flash text after Sync Now: what will and won't happen."""
     now = utcnow()
     fs = feeds(db, kind, now)
     cached = [f for f in fs if f.cached_until]

@@ -334,10 +334,18 @@ button.tgl:hover { border-color: var(--accent-2); }
 .tier.tier-titan { font-weight: 800; letter-spacing: .02em; }
 .q-note { color: var(--accent-2); }
 
-/* Sync now + explanation */
+/* Sync Now + explanation */
 .sync-now { display: inline-flex; align-items: center; gap: 6px; }
 .sync-tip { min-width: 340px; }
 .sync-feed { display: block; padding: 4px 0; border-bottom: 1px solid var(--line); }
 .sync-feed:last-of-type { border-bottom: 0; }
 .sync-name { display: block; font-weight: 600; }
 .sync-line { display: block; }
+.sync-hover { display: inline-block; }
+.sync-timer { display: block; margin: 5px 0 2px; }
+.sync-timer-top { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--muted); }
+.sync-timer-left { color: var(--text); font-variant-numeric: tabular-nums; }
+.sync-timer .meter { display: block; height: 6px; margin-top: 3px; background: #2a3441; }
+.sync-timer .meter > span { display: block; transition: width .9s linear; }
+.sync-timer.esi .meter > span { background: var(--accent); }
+.sync-timer.due .meter > span { background: var(--ok); }

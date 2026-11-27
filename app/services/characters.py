@@ -74,3 +74,12 @@ def set_tracking(db: Session, char: Character, key: str, on: bool) -> None:
         # Keep the last known skills (slots still work); just refetch fresh when re-enabled.
         db.execute(delete(SyncState).where(SyncState.key.in_(
             [f"skills:{cid}", f"skillqueue:{cid}"])))
+
+
+def remove(db: Session, char: Character) -> None:
+    """Delete a character and everything synced for it. Its token, skills and skill queue
+    go by foreign-key cascade; personal jobs and blueprints are keyed by owner, so they're
+    cleared here (same as switching Industry off). Corp data stays."""
+    for key in ("industry", "skills"):
+        set_tracking(db, char, key, False)
+    db.delete(char)
