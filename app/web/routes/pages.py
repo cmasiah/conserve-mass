@@ -19,7 +19,7 @@ from app.security import require_csrf, require_user
 from app.services.backup import run_backup
 from app.services.customers import FINISHED, customer_stats
 from app.services import home as home_svc, updater, version
-from app.services.notifier import cancel_for_subject, enqueue
+from app.services.notifier import cancel_for_subject, enqueue, group_for_display
 from app.web.templating import flash, render
 
 router = APIRouter(dependencies=[Depends(require_user)])
@@ -187,6 +187,36 @@ def characters(request: Request, db: Session = Depends(get_db)):
                   courier_scopes=set(COURIER_SCOPES), industry_scopes=set(INDUSTRY_SCOPES))
 
 
+@router.get("/characters/onboard/start")
+def onboard_start(request: Request):
+    """Start bulk linking: every EVE login comes back to the onboarding page."""
+    request.session["onboard"] = {"linked": []}
+    return _redirect("/auth/login?profile=industry")
+
+
+@router.get("/characters/onboard")
+def onboard(request: Request, db: Session = Depends(get_db)):
+    state = request.session.get("onboard")
+    if state is None:
+        return _redirect("/characters")
+    need = set(INDUSTRY_SCOPES)
+    chars = db.scalars(select(Character).order_by(Character.name)).all()
+    ready = [c for c in chars if c.token and c.token.is_valid and need <= c.token.scope_set]
+    pending = [c for c in chars if c not in ready]
+    return render(request, "onboard.html", linked=state.get("linked", []), ready=ready,
+                  pending=pending, total=len(chars))
+
+
+@router.post("/characters/onboard/stop")
+def onboard_stop(request: Request, csrf: str = Form("")):
+    require_csrf(request, csrf)
+    state = request.session.pop("onboard", None) or {}
+    n = len(state.get("linked", []))
+    flash(request, f"Linked {n} character{'s' if n != 1 else ''}. Industry data syncs within the hour, "
+                   "or use Sync now on the Slots page.")
+    return _redirect("/characters")
+
+
 @router.post("/characters/{character_id}/sync")
 def set_sync_character(request: Request, character_id: int, csrf: str = Form(""),
                        db: Session = Depends(get_db)):
@@ -219,8 +249,9 @@ def delete_character(request: Request, character_id: int, csrf: str = Form(""),
 @router.get("/system")
 async def system(request: Request, db: Session = Depends(get_db)):
     s = get_settings()
-    notes = db.scalars(select(Notification).order_by(Notification.created_at.desc())
-                       .limit(25)).all()
+    notes = db.scalars(select(Notification).order_by(
+        func.coalesce(Notification.sent_at, Notification.created_at).desc()).limit(60)).all()
+    notes = group_for_display(notes)[:20]
     syncs = db.scalars(select(SyncState)).all()
     backups = sorted(s.backup_dir.glob("conserve-mass-*.db"), reverse=True)[:5] \
         if s.backup_dir.exists() else []
@@ -268,7 +299,7 @@ def test_discord(request: Request, csrf: str = Form(""), db: Session = Depends(g
     enqueue(db, ref=f"test:{utcnow().timestamp()}", kind="test", title="👋 Test from Conserve Mass",
             body="If you can read this, Discord DMs are working.")
     db.commit()
-    flash(request, "Test DM queued — it should arrive within ~20s.")
+    flash(request, "Test message queued. It should arrive in Discord within ~20 seconds.")
     return _redirect("/system")
 
 

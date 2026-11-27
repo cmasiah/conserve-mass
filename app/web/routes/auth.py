@@ -115,6 +115,13 @@ async def callback(request: Request, code: str = "", state: str = "",
     db.commit()
 
     if logged_in:
+        onboard = request.session.get("onboard")
+        if onboard is not None:
+            # Bulk linking: remember who was just linked and go straight back to the
+            # onboarding page, which offers (or auto-starts) the next EVE login.
+            onboard["linked"] = [n for n in onboard.get("linked", []) if n != char.name] + [char.name]
+            request.session["onboard"] = onboard
+            return RedirectResponse("/characters/onboard", status_code=303)
         flash(request, f"Linked {char.name}.")
         return RedirectResponse("/characters", status_code=303)
 
