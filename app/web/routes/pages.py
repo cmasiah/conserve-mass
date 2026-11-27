@@ -18,7 +18,7 @@ from app.models.couriers import OPEN_STATUSES, WORK_STATUSES
 from app.security import require_csrf, require_user
 from app.services.backup import run_backup
 from app.services.customers import FINISHED, customer_stats
-from app.services import updater, version
+from app.services import home as home_svc, updater, version
 from app.services.notifier import cancel_for_subject, enqueue
 from app.web.templating import flash, render
 
@@ -30,6 +30,14 @@ def _redirect(url: str) -> RedirectResponse:
 
 
 @router.get("/")
+def home(request: Request, db: Session = Depends(get_db)):
+    info = version.cached()
+    data = home_svc.build(db, bot_configured=bot.configured, bot_ready=bot.is_ready_for_dm(),
+                          update_available=info.update_available, latest=info.latest_label)
+    return render(request, "home.html", **data)
+
+
+@router.get("/hauling")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     now = utcnow()
     not_blocked = Contract.issuer_id.not_in(
@@ -228,17 +236,16 @@ async def check_updates(request: Request, csrf: str = Form("")):
     if info.error:
         flash(request, info.error, "error")
     elif info.update_available:
-        flash(request, f"Version {info.latest} is available.")
+        flash(request, f"Version {info.latest_label} is available.")
     else:
-        flash(request, f"You're up to date ({info.current}).")
+        flash(request, f"You're up to date ({info.current_label}).")
     return _redirect("/system")
 
 
 @router.get("/system/update-status")
 def update_status():
     st = updater.status()
-    from app.config import APP_VERSION
-    return JSONResponse({"version": APP_VERSION, "pending": st.pending,
+    return JSONResponse({"version": version.cached().current_label, "pending": st.pending,
                          "result": st.last_result, "finished": st.last_finished})
 
 
@@ -271,7 +278,7 @@ def sync_now(request: Request, csrf: str = Form("")):
     from app.jobs.scheduler import trigger_sync_now
     trigger_sync_now()
     flash(request, "Sync triggered. ESI caches contracts ~5 minutes, so new ones may lag.")
-    return _redirect("/")
+    return _redirect("/hauling")
 
 
 @router.post("/system/backup-now")

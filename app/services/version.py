@@ -1,5 +1,12 @@
-"""Compare the running version with the newest one published on GitHub."""
+"""Compare the running version with the newest one published on GitHub.
+
+Two release channels, baked into the image at build time (see Dockerfile):
+  stable  image :latest, built from `main`. An update is a higher APP_VERSION.
+  beta    image :beta, built from `beta`. Every new commit on `beta` is an update,
+          even without a version bump, so it's compared by git commit instead.
+"""
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -12,6 +19,11 @@ from app.db import utcnow
 log = logging.getLogger(__name__)
 
 CACHE_FOR = timedelta(minutes=10)
+CHANNEL = "beta" if os.environ.get("APP_CHANNEL", "").strip().lower() == "beta" else "stable"
+GIT_SHA = os.environ.get("APP_GIT_SHA", "").strip().lower()
+if GIT_SHA in ("", "unknown"):
+    GIT_SHA = ""
+BRANCH = {"stable": "main", "beta": "beta"}[CHANNEL]
 _VERSION_RE = re.compile(r'^APP_VERSION = "([^"]+)"', re.MULTILINE)
 
 
@@ -23,10 +35,31 @@ class VersionInfo:
     checked_at: datetime | None = None
     error: str | None = None
     image_ready: bool = False  # a built image for `latest` exists on GHCR
+    channel: str = CHANNEL
+    current_sha: str = GIT_SHA
+    latest_sha: str | None = None   # beta: head commit of the beta branch
 
     @property
     def newer(self) -> bool:
+        if self.channel == "beta":
+            # A local build doesn't know its commit; never nag it.
+            return bool(self.latest_sha and self.current_sha
+                        and self.latest_sha != self.current_sha)
         return bool(self.latest) and parse_version(self.latest) > parse_version(self.current)
+
+    @staticmethod
+    def _label(version: str | None, sha: str | None, channel: str) -> str | None:
+        if version is None:
+            return None
+        return f"{version}-beta+{sha[:7]}" if channel == "beta" and sha else version
+
+    @property
+    def current_label(self) -> str:
+        return self._label(self.current, self.current_sha, self.channel)
+
+    @property
+    def latest_label(self) -> str | None:
+        return self._label(self.latest, self.latest_sha, self.channel)
 
     @property
     def update_available(self) -> bool:
@@ -81,29 +114,37 @@ async def check(force: bool = False) -> VersionInfo:
 
     repo = get_settings().update_repo
     info = VersionInfo(latest=_cache.latest, commits=_cache.commits,
-                       image_ready=_cache.image_ready)
+                       image_ready=_cache.image_ready, latest_sha=_cache.latest_sha)
     headers = {"User-Agent": get_settings().user_agent}
     try:
         async with httpx.AsyncClient(timeout=10, headers=headers) as client:
-            r = await client.get(f"https://raw.githubusercontent.com/{repo}/main/app/config.py")
+            r = await client.get(
+                f"https://raw.githubusercontent.com/{repo}/{BRANCH}/app/config.py")
             r.raise_for_status()
             m = _VERSION_RE.search(r.text)
             if m:
                 info.latest = m.group(1)
-            if info.latest and parse_version(info.latest) > parse_version(info.current):
-                info.image_ready = await image_published(client, repo, info.latest)
 
             c = await client.get(f"https://api.github.com/repos/{repo}/commits",
-                                 params={"sha": "main", "per_page": 10},
+                                 params={"sha": BRANCH, "per_page": 10},
                                  headers={"Accept": "application/vnd.github+json"})
             if c.status_code == 200:
+                data = c.json()
+                if data:
+                    info.latest_sha = data[0]["sha"].lower()
                 info.commits = [{
                     "sha": x["sha"][:7],
                     "message": x["commit"]["message"].splitlines()[0][:140],
                     "date": datetime.fromisoformat(
                         x["commit"]["committer"]["date"].replace("Z", "+00:00")),
                     "url": x["html_url"],
-                } for x in c.json()]
+                } for x in data]
+
+            if info.newer:
+                tag = f"sha-{info.latest_sha}" if CHANNEL == "beta" else info.latest
+                info.image_ready = await image_published(client, repo, tag)
+            else:
+                info.image_ready = False
     except (httpx.HTTPError, KeyError, ValueError) as e:
         info.error = f"Couldn't reach GitHub: {e}"
         log.warning("Version check failed: %s", e)
@@ -121,8 +162,8 @@ async def version_job() -> None:
     from app.services.notifier import enqueue
     changes = "\n".join(f"• {c['message']}" for c in info.commits[:5])
     with session_scope() as db:
-        enqueue(db, ref=f"version:{info.latest}", kind="update_available",
-                title=f"⬆️ Conserve Mass Ops {info.latest} is available",
-                body=f"You're running {info.current}.\n\n{changes}\n\n"
+        enqueue(db, ref=f"version:{info.latest_label}", kind="update_available",
+                title=f"⬆️ Conserve Mass Ops {info.latest_label} is available",
+                body=f"You're running {info.current_label}.\n\n{changes}\n\n"
                      f"Update from the System page.",
                 url=f"{get_settings().base_url}/system")
