@@ -22,13 +22,28 @@
   'characters': '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.5 4.2-7 8-7s7 2.5 8 7"/>',
   'notifications': '<path d="M6 16V11a6 6 0 0112 0v5l2 2H4z"/><path d="M10 20a2 2 0 004 0"/>',
   'system': '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
-  'logs': '<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>'
+  'logs': '<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
+  'hauling': '<path d="M3 7h11v9H3z"/><path d="M14 10h4l3 3v3h-7"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>',
+  'industry': '<path d="M3 20V10l5 3V10l5 3V6l8 4v10z"/><path d="M7 17h2M12 17h2M17 17h2"/>',
+  'admin': '<circle cx="12" cy="12" r="3"/><path d="M12 3l2 2.2 3-.6.6 3L20 10l-1 2.6 1 2.6-2.4 1.4-.6 3-3-.6L12 21l-2-2-3 .6-.6-3L4 15.2 5 12.6 4 10l2.4-1.4.6-3 3 .6z"/>',
+  'chev': '<path d="M9 6l6 6-6 6"/>',
+  'fold': '<path d="M15 6l-6 6 6 6"/><path d="M20 6l-6 6 6 6" opacity=".45"/>'
 } %}
 {% macro item(href, label, icon, active, badge='') -%}
-  <a href="{{ href }}" class="nav-item{{ ' active' if active }}">
+  <a href="{{ href }}" class="nav-item{{ ' active' if active }}" title="{{ label }}">
     <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS[icon] | safe }}</svg>
     <span class="nav-label">{{ label }}</span>{{ badge | safe }}
   </a>
+{%- endmacro %}
+{% macro section(key, label, icon, open) -%}
+  <div class="nav-sec{{ ' open' if open }}" data-sec="{{ key }}" data-has-active="{{ 1 if open else 0 }}">
+    <button type="button" class="nav-group" aria-expanded="{{ 'true' if open else 'false' }}" title="{{ label }}">
+      <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS[icon] | safe }}</svg>
+      <span class="nav-label">{{ label }}</span>
+      <svg class="nav-chev" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS['chev'] | safe }}</svg>
+    </button>
+    <div class="nav-sub"><div class="nav-sub-inner">{{ caller() }}</div></div>
+  </div>
 {%- endmacro %}
 <aside class="side">
   <a href="/" class="brand-block">
@@ -39,23 +54,33 @@
   <nav>
     {{ item('/', 'Home', 'home', p == '/') }}
 
-    <div class="nav-group">Hauling Services</div>
-    {{ item('/hauling', 'Dashboard', 'dashboard', p == '/hauling') }}
-    {{ item('/contracts', 'Contracts', 'contracts', p.startswith('/contracts')) }}
-    {{ item('/customers', 'Customers', 'customers', p.startswith('/customers')) }}
+    {% set in_hauling = p == '/hauling' or p.startswith('/contracts') or p.startswith('/customers') %}
+    {% call section('hauling', 'Hauling Services', 'hauling', in_hauling) %}
+      {{ item('/hauling', 'Dashboard', 'dashboard', p == '/hauling') }}
+      {{ item('/contracts', 'Contracts', 'contracts', p.startswith('/contracts')) }}
+      {{ item('/customers', 'Customers', 'customers', p.startswith('/customers')) }}
+    {% endcall %}
 
-    <div class="nav-group">Industry</div>
-    {{ item('/industry/slots', 'Slots & Skills', 'slots', p.startswith('/industry/slots')) }}
-    {{ item('/industry/jobs', 'Jobs', 'jobs', p.startswith('/industry/jobs')) }}
-    {{ item('/industry/blueprints', 'Blueprints', 'blueprints', p.startswith('/industry/blueprints')) }}
+    {% call section('industry', 'Industry', 'industry', p.startswith('/industry')) %}
+      {{ item('/industry/slots', 'Slots & Skills', 'slots', p.startswith('/industry/slots')) }}
+      {{ item('/industry/jobs', 'Jobs', 'jobs', p.startswith('/industry/jobs')) }}
+      {{ item('/industry/blueprints', 'Blueprints', 'blueprints', p.startswith('/industry/blueprints')) }}
+    {% endcall %}
 
-    <div class="nav-group">Admin</div>
-    {{ item('/characters', 'Characters', 'characters', p.startswith('/characters')) }}
-    {{ item('/settings/notifications', 'Notifications', 'notifications', p.startswith('/settings')) }}
-    {{ item('/system', 'System', 'system', p.startswith('/system'),
-            ' <span class="nav-badge">update</span>' if version_info().update_available else '') }}
-    {{ item('/logs', 'Logs', 'logs', p.startswith('/logs')) }}
+    {% set upd = version_info().update_available %}
+    {% call section('admin', 'Admin', 'admin', p.startswith('/characters') or p.startswith('/settings') or p.startswith('/system') or p.startswith('/logs')) %}
+      {{ item('/characters', 'Characters', 'characters', p.startswith('/characters')) }}
+      {{ item('/settings/notifications', 'Notifications', 'notifications', p.startswith('/settings')) }}
+      {{ item('/system', 'System', 'system', p.startswith('/system'),
+              ' <span class="nav-badge">update</span>' if upd else '') }}
+      {{ item('/logs', 'Logs', 'logs', p.startswith('/logs')) }}
+    {% endcall %}
   </nav>
+
+  <button type="button" class="nav-fold" id="nav-fold" title="Collapse menu" aria-label="Collapse menu">
+    <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS['fold'] | safe }}</svg>
+    <span class="nav-label">Collapse</span>
+  </button>
 
   <div class="who">
     <img src="https://images.evetech.net/characters/{{ user.character_id }}/portrait?size=64" alt="">
@@ -66,6 +91,37 @@
     </form>
   </div>
 </aside>
+<script>
+/* Sidebar: sections fold open/closed without leaving the page; the whole menu can
+   shrink to an icon strip. Choices are remembered in this browser. */
+(() => {
+  const KEY = 'cmass.nav';
+  let st = {};
+  try { st = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) {}
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {} };
+  const body = document.body;
+  if (st.mini) body.classList.add('nav-mini');
+
+  document.querySelectorAll('.nav-sec').forEach(sec => {
+    const key = sec.dataset.sec, btn = sec.querySelector('.nav-group');
+    const setOpen = open => { sec.classList.toggle('open', open); btn.setAttribute('aria-expanded', open); };
+    // The section holding the current page is always open; others remember their state.
+    if (sec.dataset.hasActive !== '1' && st.open && key in st.open) setOpen(st.open[key]);
+    btn.addEventListener('click', () => {
+      if (body.classList.contains('nav-mini')) {          // in icon mode, expand the menu first
+        body.classList.remove('nav-mini'); st.mini = false; setOpen(true);
+      } else {
+        setOpen(!sec.classList.contains('open'));
+      }
+      st.open = st.open || {}; st.open[key] = sec.classList.contains('open'); save();
+    });
+  });
+  document.getElementById('nav-fold').addEventListener('click', () => {
+    st.mini = body.classList.toggle('nav-mini'); save();
+  });
+  requestAnimationFrame(() => body.classList.add('nav-ready'));  // no animation on first paint
+})();
+</script>
 {% endif %}
 <main>
   {% if flash %}<div class="flash {{ flash.level }}">{{ flash.msg }}</div>{% endif %}

@@ -85,9 +85,29 @@ def jobs(request: Request, cat: str = "", who: int = 0, db: Session = Depends(ge
                   installers=installers, ready=ready, now=now)
 
 
+def aggregate_blueprints(items: list[dict]) -> list[dict]:
+    """Merge identical blueprints into one line with a count.
+
+    Identical = same type, original/copy, ME, TE and runs. A stacked BPO
+    (quantity > 0) counts as that many blueprints.
+    """
+    merged: dict[tuple, dict] = {}
+    for it in items:
+        b = it["b"]
+        key = (b.type_id, b.is_copy, b.material_efficiency, b.time_efficiency,
+               b.runs if b.is_copy else -1)
+        n = b.quantity if b.quantity > 0 else 1
+        if key in merged:
+            merged[key]["count"] += n
+        else:
+            merged[key] = {**it, "count": n}
+    return sorted(merged.values(),
+                  key=lambda x: (x["name"], x["b"].is_copy, -x["b"].material_efficiency))
+
+
 @router.get("/blueprints")
 def blueprints(request: Request, q: str = "", owner: str = "all", kind: str = "all",
-               db: Session = Depends(get_db)):
+               combine: int = 1, db: Session = Depends(get_db)):
     stmt = select(Blueprint)
     if owner in ("corporation", "character"):
         stmt = stmt.where(Blueprint.owner_type == owner)
@@ -113,11 +133,17 @@ def blueprints(request: Request, q: str = "", owner: str = "all", kind: str = "a
             group = f"{names.get(b.owner_id, b.owner_id)} · personal"
         groups.setdefault(group, []).append({
             "b": b, "name": names.get(b.type_id, f"Type {b.type_id}")})
-    for items in groups.values():
-        items.sort(key=lambda x: (x["name"], x["b"].is_copy, -x["b"].material_efficiency))
-    total = sum(len(v) for v in groups.values())
-    return render(request, "industry_blueprints.html", groups=dict(sorted(groups.items())),
-                  q=q, owner=owner, kind=kind, total=total)
+
+    view = {}
+    for group, items in sorted(groups.items()):
+        lines = aggregate_blueprints(items) if combine else sorted(
+            ({**it, "count": it["b"].quantity if it["b"].quantity > 0 else 1} for it in items),
+            key=lambda x: (x["name"], x["b"].is_copy, -x["b"].material_efficiency))
+        view[group] = {"lines": lines, "total": sum(x["count"] for x in lines)}
+    total = sum(g["total"] for g in view.values())
+    lines = sum(len(g["lines"]) for g in view.values())
+    return render(request, "industry_blueprints.html", groups=view, q=q, owner=owner,
+                  kind=kind, combine=combine, total=total, lines=lines)
 
 
 @router.post("/sync-now")
