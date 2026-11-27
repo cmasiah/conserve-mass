@@ -98,6 +98,12 @@ If `BASE_URL` is `https://…`, the session cookie is HTTPS-only, so log in thro
 
 Discord slash commands (owner only, work in DMs): `/contracts` and `/sync`.
 
+### Spam & flood protection
+- **Digests:** if more than `DIGEST_THRESHOLD` (3) alerts of one kind are waiting, you get one message ("🚚 37 new courier contracts", top 15 listed) instead of 37 pings. There are also at most 3 messages per 20 s and `DISCORD_MAX_MESSAGES_PER_HOUR` (30) per hour; extra alerts wait and get digested.
+- **Auto-mute:** an issuer who posts more than `SPAM_CONTRACTS_PER_HOUR` (10) contracts within an hour (by EVE issue time) is muted automatically, their queued alerts are dropped, and you get **one** "possible spam" DM.
+- **Mute / Block** on each customer's page. *Muted*: tracked, no pings. *Blocked*: no pings, hidden from the dashboard, no ESI lookups for their contracts. ESI can't reject contracts, so reject junk in-game.
+- **ESI frugality:** the contract list is one call no matter how many contracts exist. Names are batched (one call per 1000 IDs); unknown locations are capped at `MAX_LOCATION_LOOKUPS_PER_SYNC` (25) per sync; IDs that can't be resolved are remembered for 24 h; the app pauses when a rate-limit bucket drops under 10%.
+
 ### Logs tab
 **Logs** in the top menu shows a live view of the app's logs: level filter, text search, expandable tracebacks and an error/warning count.
 It holds the last 5,000 lines in memory. Full history is written to `/config/logs/conserve-mass.log` (rotated, 5 × 5 MB) and can be downloaded from the page.
