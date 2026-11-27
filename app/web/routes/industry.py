@@ -37,7 +37,15 @@ def _missing_scopes(db: Session) -> list[tuple[Character, list[str]]]:
 
 @router.get("/slots")
 def slots(request: Request, sort: str = "name", only: str = "", db: Session = Depends(get_db)):
-    rows = industry.character_overview(db)
+    everyone = industry.character_overview(db)
+    synced = [r for r in everyone if r.has_skills]
+    # Command-center totals always cover every tracked character, whatever the filter.
+    totals = {c: {"cap": sum(r.capacity.get(c, 0) for r in synced),
+                  "used": sum(r.used.get(c, 0) for r in synced),
+                  "free": sum(r.free(c) for r in synced)} for c in CATS}
+    capital_builders = sum(1 for r in synced if r.capital_level >= 1)
+
+    rows = list(everyone)
     if only in CATS:
         rows = [r for r in rows if r.capacity.get(only, 0) >= 10]
     elif only == "capital":
@@ -46,11 +54,12 @@ def slots(request: Request, sort: str = "name", only: str = "", db: Session = De
         rows.sort(key=lambda r: (r.capacity.get(sort, 0), r.free(sort)), reverse=True)
     elif sort == "capital":
         rows.sort(key=lambda r: r.capital_level, reverse=True)
-    totals = {c: (sum(r.capacity.get(c, 0) for r in rows),
-                  sum(r.used.get(c, 0) for r in rows)) for c in CATS}
+    detail = {r.character.character_id: {c: industry.slot_breakdown(r.levels, c) for c in CATS}
+              for r in rows if r.has_skills}
     return render(request, "industry_slots.html", rows=rows, sort=sort, only=only, cats=CATS,
-                  totals=totals, max_slots=industry.MAX_SLOTS, missing=_missing_scopes(db),
-                  now=utcnow())
+                  labels=industry.CATEGORY_LABELS, totals=totals, detail=detail,
+                  tracked=len(everyone), synced=len(synced), capital_builders=capital_builders,
+                  tiers=industry.CAPITAL_TIERS, missing=_missing_scopes(db), now=utcnow())
 
 
 @router.get("/jobs")

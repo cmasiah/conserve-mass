@@ -73,3 +73,20 @@ def test_identical_blueprints_merge_into_one_line_with_count():
     lines = aggregate_blueprints(items)
     assert sorted((x["name"], x["count"]) for x in lines) == [
         ("Charon BPC", 1), ("Charon BPC", 40), ("Rifter BP", 4)]
+
+
+def test_slot_breakdown_lists_skills_and_remote_range():
+    from app.services.industry import slot_breakdown
+    lv = {"Reactions": 4, "Mass Reactions": 5, "Advanced Mass Reactions": 4, "Remote Reactions": 2,
+          "Mass Production": 4, "Advanced Mass Production": 2}
+    r = slot_breakdown(lv, "reactions")
+    assert r["capacity"] == 10
+    assert [x["name"] for x in r["rows"]] == ["Reactions", "Mass Reactions",
+                                             "Advanced Mass Reactions"]
+    assert r["remote"]["name"] == "Remote Reactions" and r["remote"]["level"] == 2
+    m = slot_breakdown(lv, "manufacturing")
+    assert m["capacity"] == 7                                   # this character's max, not 11
+    assert m["remote"]["reach"] == "current system only"        # no Supply Chain Management
+    assert slot_breakdown({"Scientific Networking": 3}, "science")["remote"]["reach"] \
+        == "within 15 jumps"
+    assert slot_breakdown({}, "reactions")["capacity"] == 0     # no Reactions skill
