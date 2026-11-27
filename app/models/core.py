@@ -99,7 +99,9 @@ class Notification(Base):
     title: Mapped[str] = mapped_column(String(256))
     body: Mapped[str] = mapped_column(Text, default="")
     url: Mapped[str | None] = mapped_column(String(512))
-    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|sent|failed
+    line: Mapped[str | None] = mapped_column(Text)        # one-line summary used in digests
+    subject_id: Mapped[int | None] = mapped_column(BigInteger, index=True)  # issuer it's about
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|sent|failed|dropped
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

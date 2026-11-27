@@ -1,7 +1,7 @@
 """Courier / jump-freight contract tracking."""
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base, UTCDateTime, utcnow
@@ -22,9 +22,19 @@ class Customer(Base):
     name: Mapped[str | None] = mapped_column(String(64))
     corporation_id: Mapped[int | None] = mapped_column(BigInteger)
     corporation_name: Mapped[str | None] = mapped_column(String(64))
-    tag: Mapped[str | None] = mapped_column(String(32))   # vip, blocked, ...
+    tag: Mapped[str | None] = mapped_column(String(32))   # vip, alliance, ...
     notes: Mapped[str | None] = mapped_column(Text)
     first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+    # Abuse controls. muted = tracked but no DMs; blocked = no DMs, hidden, no lookups.
+    muted: Mapped[bool] = mapped_column(Boolean, default=False)
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    flag_reason: Mapped[str | None] = mapped_column(Text)
+    flagged_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    @property
+    def silenced(self) -> bool:
+        return bool(self.muted or self.blocked)
 
     contracts: Mapped[list["Contract"]] = relationship(back_populates="customer")
 
