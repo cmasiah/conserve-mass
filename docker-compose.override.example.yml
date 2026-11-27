@@ -5,6 +5,9 @@ services:
   conserve-mass:
     networks:
       - proxy
+    # Optional: make Unraid's "WebUI" menu entry open your proxy hostname instead of IP:port
+    # labels:
+    #   net.unraid.docker.webui: "https://cmass.your-domain.example/"
 
 networks:
   proxy:

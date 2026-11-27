@@ -28,3 +28,8 @@ services:
       - ${CMASS_APPDATA:-/mnt/user/appdata/conserve-mass}:/config
     ports:
       - "${CMASS_PORT:-8000}:8000"
+    labels:
+      # Unraid Docker tab: icon + "WebUI" menu entry for a Compose-managed container.
+      net.unraid.docker.icon: "https://raw.githubusercontent.com/cmasiah/conserve-mass/main/unraid/icon.png"
+      net.unraid.docker.webui: "http://[IP]:[PORT:${CMASS_PORT:-8000}]/"
+      net.unraid.docker.shell: "sh"
