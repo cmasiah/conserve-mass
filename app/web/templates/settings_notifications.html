@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Notifications · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<h1>Discord notifications</h1>
+<p class="muted">Choose which DMs you get. Switching one off stops new alerts of that kind from being queued;
+  anything already sent is unaffected. Several alerts of the same kind arriving together are still grouped into one digest message.</p>
+
+<form method="post">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="two-col">
+  {% for group, items in groups.items() %}
+    <div class="card">
+      <h2 style="margin-top:0">{{ group }}</h2>
+      {% for k, on in items %}
+        <label class="check">
+          <input type="checkbox" name="kind_{{ k.key }}" value="1" {{ 'checked' if on }}>
+          <span><strong>{{ k.label }}</strong>{% if k.help %}<br><span class="small muted">{{ k.help }}</span>{% endif %}</span>
+        </label>
+      {% endfor %}
+
+      {% if group == 'Industry' %}
+        <div class="subrules">
+          <div class="small muted" style="margin:10px 0 6px">Alert when a <strong>manufacturing</strong> job for one of these is ready.
+            Reactions, research, copying, invention and everything else never alert.</div>
+          {% for key, label, groupnames, on in rules %}
+            <label class="check">
+              <input type="checkbox" name="rule_{{ key }}" value="1" {{ 'checked' if on }}>
+              <span>{{ label }}<br><span class="small muted">Ship groups: {{ groupnames | join(', ') }}</span></span>
+            </label>
+          {% endfor %}
+          <label style="display:block;margin-top:10px">
+            <span class="small"><strong>Also watch items whose name contains</strong> (comma separated)</span>
+            <textarea name="industry_keywords" placeholder="e.g. Rorqual, Orca, Capital Construction Parts">{{ keywords }}</textarea>
+          </label>
+        </div>
+      {% endif %}
+    </div>
+  {% endfor %}
+  </div>
+  <p><button class="primary">Save preferences</button>
+    <span class="small muted">Use <a href="/system">System → Send test DM</a> to check delivery; the test always sends.</span></p>
+</form>
+
+<style>
+  label.check { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; cursor: pointer; }
+  label.check input { margin-top: 3px; }
+  .subrules { border-left: 2px solid var(--line); padding-left: 12px; margin-left: 4px; }
+</style>
+{% endblock %}

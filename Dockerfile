@@ -24,6 +24,13 @@ COPY app ./app
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# Set by the GitHub build: which channel this image belongs to and its commit,
+# so the in-app update check compares against the right branch.
+ARG RELEASE_CHANNEL=stable
+ARG GIT_SHA=unknown
+ENV APP_CHANNEL=$RELEASE_CHANNEL \
+    APP_GIT_SHA=$GIT_SHA
+
 VOLUME ["/config"]
 EXPOSE 8000
 

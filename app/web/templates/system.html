@@ -10,9 +10,10 @@
 <div class="card" style="margin-bottom:16px">
   <div class="toolbar" style="margin-bottom:8px">
     <strong>Version</strong>
-    <span class="mono">{{ ver.current }}</span>
-    {% if ver.update_available %}<span class="pill warn">{{ ver.latest }} available</span>
-    {% elif ver.building %}<span class="pill" title="GitHub is still building and testing this version">{{ ver.latest }} building…</span>
+    <span class="mono">{{ ver.current_label }}</span>
+    {% if ver.channel == "beta" %}<span class="pill info small" title="Running the :beta image, built from the beta branch">beta channel</span>{% endif %}
+    {% if ver.update_available %}<span class="pill warn">{{ ver.latest_label }} available</span>
+    {% elif ver.building %}<span class="pill" title="GitHub is still building and testing this version">{{ ver.latest_label }} building…</span>
     {% elif ver.latest %}<span class="pill ok">up to date</span>
     {% else %}<span class="pill bad">couldn't check</span>{% endif %}
     <span class="small muted">checked {{ ver.checked_at | delta(now) }}</span>
@@ -120,7 +121,7 @@
   const banner = document.getElementById('updating');
   if (banner.hidden) return;
   const msg = document.getElementById('upd-msg');
-  const startVersion = {{ ver.current | tojson }};
+  const startVersion = {{ ver.current_label | tojson }};
   const requestedAt = Date.now() - 5000;
   const deadline = Date.now() + 6 * 60 * 1000;
   let sawPending = false;

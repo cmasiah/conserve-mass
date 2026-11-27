@@ -40,6 +40,7 @@ DIGEST_TITLES = {
     "status_cancelled": "🚫 {n} contracts cancelled",
     "status_deleted": "🗑️ {n} contracts deleted",
     "status_rejected": "↩️ {n} contracts rejected",
+    "industry_job_ready": "🏭 {n} watched industry jobs ready for delivery",
 }
 
 _sent_times: deque[float] = deque()  # monotonic timestamps of messages sent (last hour)
@@ -48,7 +49,11 @@ _sent_times: deque[float] = deque()  # monotonic timestamps of messages sent (la
 def enqueue(db: Session, *, ref: str, kind: str, title: str, body: str = "",
             url: str | None = None, line: str | None = None,
             subject_id: int | None = None) -> bool:
-    """Queue a notification. Returns False if this (ref, kind) was already queued."""
+    """Queue a notification. Returns False if it was already queued, or if you've
+    switched this kind of notification off on the Notifications settings page."""
+    from app.services import prefs
+    if not prefs.is_enabled(db, kind):
+        return False
     stmt = insert(Notification).values(
         ref=ref, kind=kind, title=title[:256], body=body, url=url, line=line,
         subject_id=subject_id, status="pending", attempts=0, created_at=utcnow(),

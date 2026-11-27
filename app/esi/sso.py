@@ -35,6 +35,7 @@ INDUSTRY_SCOPES = [
     "esi-assets.read_corporation_assets.v1",
     "esi-characters.read_blueprints.v1",
     "esi-corporations.read_blueprints.v1",
+    "esi-corporations.read_divisions.v1",   # corp hangar division names
 ]
 SCOPE_PROFILES = {"courier": COURIER_SCOPES, "industry": COURIER_SCOPES + INDUSTRY_SCOPES,
                   "login": []}

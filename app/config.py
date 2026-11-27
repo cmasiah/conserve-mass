@@ -5,7 +5,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_NAME = "Conserve Mass Ops"
-APP_VERSION = "0.4.3"
+APP_VERSION = "0.5.0"
 
 
 class Settings(BaseSettings):
@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     discord_max_messages_per_hour: int = 30
     # New location lookups per sync (each unknown structure is one ESI call).
     max_location_lookups_per_sync: int = 25
+
+    # --- industry polling (ESI's own cache timers are always respected on top) ---
+    industry_skills_poll_minutes: int = 60
+    industry_jobs_poll_minutes: int = 5
+    industry_blueprints_poll_minutes: int = 60
 
     @field_validator("corporation_id", "discord_owner_user_id", mode="before")
     @classmethod
