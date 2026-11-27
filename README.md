@@ -84,6 +84,7 @@ If `BASE_URL` is `https://…`, the session cookie is HTTPS-only, so log in thro
 - Every 60 seconds the scheduler checks whether ESI's cache for corp contracts (about 5 minutes) has expired. If it has, it fetches the list, using ETag and pagination.
 - Only `courier` contracts **assigned to Conserve Mass** are stored. Every status change is written to `contract_events`.
 - ESI only returns roughly the last 30 days of contracts, so this database is your permanent history.
+- The Customers tab lists people with at least one **delivered** contract (toggle to show every issuer). Earnings and volume count delivered contracts only.
 - Alerts go into an outbox table (`notifications`) with a unique constraint on (ref, kind). Restarts and Discord outages never lose an alert or send one twice.
 
 | Alert | When |
@@ -105,6 +106,18 @@ It holds the last 5,000 lines in memory. Full history is written to `/config/log
 - A nightly backup runs at 04:17 to `/config/backups/` and is kept for `BACKUP_KEEP_DAYS`. You can also trigger one from the System page. CA Appdata Backup will pick these up too.
 - To update: `bash /mnt/user/appdata/conserve-mass-src/update.sh`. It pulls the newest image and restarts. Database migrations run automatically on start.
 - To roll back: set `image: ghcr.io/cmasiah/conserve-mass:<version>` in `docker-compose.yml`, then run `docker compose up -d`.
+
+### One-click updates from the app
+The **System** tab shows the running version, the newest one on GitHub, recent changes, and an **Update now** button. An "update" badge appears in the menu when a new version is out, and you get a Discord DM once per new version.
+
+The app never controls Docker itself (that would give a web page root access to the server). Instead, **Update now** drops a request file in `/config`, and a small host script picks it up:
+
+1. Install **User Scripts** from Community Apps.
+2. Settings → User Scripts → **Add New Script**, name it `conserve-mass-updater`.
+3. Replace its contents with: `bash /mnt/user/appdata/conserve-mass-src/update-watcher.sh`
+4. Schedule: **Custom** → `* * * * *` → Apply.
+
+Within a minute the System tab shows the host updater as **active**. `update.sh` keeps `update-watcher.sh` up to date automatically.
 
 ## 6. Development (optional, on a PC — not needed on Unraid)
 ```bash
