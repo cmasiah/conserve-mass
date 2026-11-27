@@ -11,7 +11,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db import utcnow
+from app.db import release_write_lock, utcnow
 from app.esi import sso
 from app.models import EsiToken, SyncState
 from app.security import decrypt, encrypt
@@ -103,6 +103,8 @@ async def _respect_rate_limit(resp: httpx.Response) -> None:
 async def _send(method: str, path: str, *, token: str | None = None,
                 params: dict | None = None, json: Any = None,
                 headers: dict | None = None) -> httpx.Response:
+    # Never sit on the SQLite write lock while waiting for CCP (see app/db.py).
+    release_write_lock(f"ESI {path}")
     hdrs = dict(headers or {})
     if token:
         hdrs["Authorization"] = f"Bearer {token}"
@@ -211,6 +213,7 @@ async def access_token(db: Session, character_id: int) -> str:
         raise NoValidToken(f"No valid ESI token for character {character_id}")
 
     lock = _refresh_locks.setdefault(character_id, asyncio.Lock())
+    release_write_lock("token refresh lock")  # the lock holder may need to write
     async with lock:
         db.refresh(tok)
         if (tok.access_token_enc and tok.access_expires_at
