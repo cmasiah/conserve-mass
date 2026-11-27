@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Logs · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Logs</h1>
+  <span id="counts" class="small"></span>
+  <span class="spacer"></span>
+  <label class="small"><input type="checkbox" id="live" checked> Live</label>
+  <label class="small"><input type="checkbox" id="follow" checked> Auto-scroll</label>
+  <select id="level">
+    {% for l in levels %}<option value="{{ l }}" {{ 'selected' if l == level }}>{{ l }}+</option>{% endfor %}
+  </select>
+  <input type="search" id="q" value="{{ q }}" placeholder="Filter text…">
+  <button id="clear" type="button">Clear view</button>
+</div>
+
+<div id="logbox" class="logbox"><div class="empty" id="empty">Waiting for log lines…</div></div>
+
+<p class="small muted">Shows the last 5,000 lines since the container started. The full history is kept in
+  <code>/config/logs</code> (5 files × 5 MB, rotated).
+  {% for name, size in files %}
+    <a href="/logs/download/{{ name }}">{{ name }}</a> <span class="muted">({{ (size / 1024) | round(0) | int }} KB)</span>{{ ',' if not loop.last }}
+  {% endfor %}
+</p>
+
+<style>
+  .logbox { background: #090c10; border: 1px solid var(--line); border-radius: var(--radius);
+    height: calc(100vh - 230px); min-height: 300px; overflow-y: auto;
+    font-family: var(--mono); font-size: 12px; line-height: 1.45; padding: 6px 0; }
+  .ln { display: grid; grid-template-columns: 150px 70px 200px 1fr; gap: 10px; padding: 1px 12px; }
+  .ln:hover { background: #121820; }
+  .ln .t { color: var(--muted); white-space: nowrap; }
+  .ln .lg { color: #6e7b8b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ln .m { white-space: pre-wrap; word-break: break-word; }
+  .ln.WARNING .lv { color: var(--warn); }
+  .ln.ERROR .lv, .ln.CRITICAL .lv { color: var(--bad); font-weight: 700; }
+  .ln.ERROR { background: #1a0e0e; }
+  .ln.INFO .lv { color: var(--accent-2); }
+  .ln.DEBUG .lv, .ln.DEBUG .m { color: var(--muted); }
+  .ln details { grid-column: 4; }
+  .ln details pre { margin: 4px 0; color: #e6a3a0; white-space: pre-wrap; }
+  @media (max-width: 860px) { .ln { grid-template-columns: 1fr; gap: 0; } .ln details { grid-column: 1; } }
+</style>
+
+<script>
+(() => {
+  const box = document.getElementById('logbox');
+  const empty = document.getElementById('empty');
+  const live = document.getElementById('live');
+  const follow = document.getElementById('follow');
+  const levelSel = document.getElementById('level');
+  const qInput = document.getElementById('q');
+  const counts = document.getElementById('counts');
+  const MAX_ROWS = 3000;
+  let lastId = 0, busy = false, debounce;
+
+  const fmtTime = ts => {
+    const d = new Date(ts * 1000);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ` +
+           `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;   // textContent: never interpret as HTML
+    return e;
+  }
+
+  function addRow(r) {
+    const row = el('div', 'ln ' + r.level);
+    row.append(el('span', 't', fmtTime(r.ts)), el('span', 'lv', r.level),
+               el('span', 'lg', r.logger), el('span', 'm', r.msg));
+    row.querySelector('.lg').title = r.logger;
+    if (r.exc) {
+      const det = el('details');
+      det.append(el('summary', 'small', 'traceback'), el('pre', '', r.exc));
+      row.append(det);
+    }
+    box.append(row);
+  }
+
+  async function poll(reset) {
+    if (busy) return;
+    busy = true;
+    try {
+      if (reset) { lastId = 0; box.replaceChildren(empty); }
+      const params = new URLSearchParams({after: lastId, level: levelSel.value, q: qInput.value});
+      const res = await fetch('/logs/api?' + params, {credentials: 'same-origin'});
+      if (res.redirected || !res.ok) { counts.textContent = 'session expired — reload'; return; }
+      const data = await res.json();
+      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+      if (data.rows.length) {
+        empty.remove();
+        data.rows.forEach(addRow);
+        lastId = data.rows[data.rows.length - 1].id;
+        while (box.children.length > MAX_ROWS) box.firstChild.remove();
+        if (follow.checked && (atBottom || reset)) box.scrollTop = box.scrollHeight;
+      }
+      const c = data.counts;
+      counts.innerHTML = '';
+      counts.append(el('span', 'pill ' + (c.ERROR ? 'bad' : 'ok'), c.ERROR + ' errors'), ' ',
+                    el('span', 'pill ' + (c.WARNING ? 'warn' : 'ok'), c.WARNING + ' warnings'));
+    } catch (e) {
+      counts.textContent = 'connection lost — retrying';
+    } finally { busy = false; }
+  }
+
+  function syncUrl() {
+    const u = new URL(location);
+    u.searchParams.set('level', levelSel.value);
+    qInput.value ? u.searchParams.set('q', qInput.value) : u.searchParams.delete('q');
+    history.replaceState(null, '', u);
+  }
+
+  levelSel.addEventListener('change', () => { syncUrl(); poll(true); });
+  qInput.addEventListener('input', () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => { syncUrl(); poll(true); }, 300);
+  });
+  document.getElementById('clear').addEventListener('click', () => box.replaceChildren(empty));
+  setInterval(() => { if (live.checked && !document.hidden) poll(false); }, 2500);
+  poll(true);
+})();
+</script>
+{% endblock %}
