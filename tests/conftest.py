@@ -20,7 +20,7 @@ def db():
     Base.metadata.create_all(engine)
     session = SessionLocal()
     session.add(Corporation(corporation_id=98000001, name="Conserve Mass", ticker="CMASS",
-                            is_tracked=True))
+                            is_tracked=True, is_home=True))
     session.commit()
     yield session
     session.close()

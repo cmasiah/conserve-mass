@@ -129,8 +129,10 @@ def test_expected_calls_per_hour_for_thirty_characters(db):
 def test_corp_403_falls_back_to_another_director_and_parks_the_first(db, fake):
     from app.models import Character, Corporation, IndustryJob, SyncState
     from app.services.industry import sync_jobs
-    _add_char(db, 2114000001, "Member No Roles", DIRECTOR_SCOPES, track_industry=False)
-    _add_char(db, 2114000002, "Real Director", DIRECTOR_SCOPES, track_industry=False)
+    _add_char(db, 2114000001, "Member No Roles", DIRECTOR_SCOPES, track_industry=False,
+              link_role="director")
+    _add_char(db, 2114000002, "Real Director", DIRECTOR_SCOPES, track_industry=False,
+              link_role="director")
     db.flush()
     db.get(Corporation, CORP).sync_character_id = 2114000001   # tried first
     db.commit()
@@ -203,7 +205,8 @@ def test_walk_and_describe_corp_office_and_container():
 def test_blueprint_sync_finds_structures_names_containers_and_categories(db, fake):
     from app.models import AssetNode, Location, MarketGroup, TypeInfo
     from app.services.industry import sync_blueprints
-    _add_char(db, 2115000001, "Director", DIRECTOR_SCOPES, is_admin=True, track_industry=False)
+    _add_char(db, 2115000001, "Director", DIRECTOR_SCOPES, is_admin=True, track_industry=False,
+              link_role="director")
     db.commit()
 
     def bp(item, type_id, loc, flag):

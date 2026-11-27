@@ -7,7 +7,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger, Boolean, Float, ForeignKey, Integer, LargeBinary, String, Text,
-    UniqueConstraint, true,
+    UniqueConstraint, false, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -27,6 +27,9 @@ class Character(Base):
     track_slots: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     track_industry: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     track_assets: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    # member = only its own data; director = its token may also read corp data (Director+).
+    link_role: Mapped[str] = mapped_column(String(12), default="member",
+                                           server_default="member")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -60,7 +63,9 @@ class Corporation(Base):
     corporation_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     name: Mapped[str | None] = mapped_column(String(64))
     ticker: Mapped[str | None] = mapped_column(String(8))
-    is_tracked: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_tracked: Mapped[bool] = mapped_column(Boolean, default=False)   # sync corp data
+    is_home: Mapped[bool] = mapped_column(Boolean, default=False,       # contracts corp
+                                          server_default=false())
     sync_character_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("characters.character_id", ondelete="SET NULL"))
 

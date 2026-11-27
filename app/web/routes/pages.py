@@ -22,7 +22,7 @@ from app.models.couriers import OPEN_STATUSES, WORK_STATUSES
 from app.security import require_csrf, require_user
 from app.services.backup import run_backup
 from app.services.customers import FINISHED, customer_stats
-from app.services import characters as char_svc, home as home_svc, sync_info, updater, version
+from app.services import characters as char_svc, corps as corps_svc, home as home_svc, sync_info, updater, version
 from app.services.notifier import cancel_for_subject, enqueue, group_for_display
 from app.web.templating import flash, render
 
@@ -62,7 +62,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
                func.coalesce(func.sum(Contract.volume_m3), 0))
         .where(Contract.status.in_(FINISHED), Contract.date_completed >= month_ago)
     ).one()
-    corp = db.scalar(select(Corporation).where(Corporation.is_tracked.is_(True)))
+    corp = corps_svc.home_corp(db)
     sync = db.get(SyncState, f"corp_contracts:{corp.corporation_id}") if corp else None
     pending = db.scalar(select(func.count()).select_from(Notification)
                         .where(Notification.status == "pending"))
@@ -187,11 +187,19 @@ def customer_moderate(request: Request, character_id: int, action: str = Form(..
 def characters(request: Request, db: Session = Depends(get_db)):
     chars = db.scalars(select(Character).order_by(Character.is_admin.desc(),
                                                   Character.name)).all()
-    corp = db.scalar(select(Corporation).where(Corporation.is_tracked.is_(True)))
+    corp = corps_svc.home_corp(db)
     corp_ids = {c.corporation_id for c in chars if c.corporation_id}
     corp_names = {e.entity_id: e.name for e in db.scalars(
         select(EntityName).where(EntityName.entity_id.in_(corp_ids)))}
+    corp_names.update({c.corporation_id: c.name for c in db.scalars(select(Corporation))
+                       if c.name})
+    corp_list = sorted(db.scalars(select(Corporation)).all(),
+                       key=lambda c: (not c.is_home, not c.is_tracked, c.name or ""))
+    by_corp: dict[int, list] = {}
+    for c in chars:
+        by_corp.setdefault(c.corporation_id, []).append(c)
     return render(request, "characters.html", chars=chars, corp=corp, corp_names=corp_names,
+                  corp_list=corp_list, by_corp=by_corp,
                   toggles=char_svc.TOGGLES, missing={c.character_id: char_svc.missing_scopes(c)
                                                      for c in chars},
                   courier_scopes=set(COURIER_SCOPES), personal_scopes=set(PERSONAL_SCOPES),
@@ -211,6 +219,42 @@ def set_tracking(request: Request, character_id: int, csrf: str = Form(""),
     flash(request, f"{char.name}: {char_svc.BY_KEY[what].label} "
                    f"{'on' if enabled else 'off'}.")
     return _redirect(f"/characters#c{character_id}")
+
+
+@router.post("/characters/{character_id}/role")
+def set_role(request: Request, character_id: int, csrf: str = Form(""), role: str = Form(""),
+             db: Session = Depends(get_db)):
+    require_csrf(request, csrf)
+    char = db.get(Character, character_id)
+    if char is None or role not in ("member", "director"):
+        raise HTTPException(404)
+    char.link_role = role
+    db.commit()
+    if role == "director" and not set(CORP_INDUSTRY_SCOPES) <= (
+            char.token.scope_set if char.token else set()):
+        flash(request, f"{char.name} is Director+ now, but its login doesn't include the corp "
+                       "scopes yet. Re-link it with Director+ to grant them.", "error")
+    else:
+        flash(request, f"{char.name} is now {'Director+' if role == 'director' else 'a Member'}"
+                       f"{': its token can read corp data' if role == 'director' else ': personal data only'}.")
+    return _redirect(f"/characters#c{character_id}")
+
+
+@router.post("/corporations/{corporation_id}/track")
+def set_corp_tracking(request: Request, corporation_id: int, csrf: str = Form(""),
+                      on: str = Form(""), db: Session = Depends(get_db)):
+    require_csrf(request, csrf)
+    corp = db.get(Corporation, corporation_id)
+    if corp is None:
+        raise HTTPException(404)
+    corps_svc.set_tracked(db, corp, on == "1")
+    db.commit()
+    label = corp.name or corp.corporation_id
+    flash(request, f"Corp data for {label} switched on. It syncs on the next industry run "
+                   "(or press Sync Now on the Slots page)." if on == "1" else
+                   f"Corp data for {label} switched off and cleared. Its members' personal "
+                   "data still syncs.")
+    return _redirect("/characters#corps")
 
 
 def _onboard_profile(value: str | None) -> str:
@@ -255,7 +299,7 @@ def onboard_stop(request: Request, csrf: str = Form("")):
 def set_sync_character(request: Request, character_id: int, csrf: str = Form(""),
                        db: Session = Depends(get_db)):
     require_csrf(request, csrf)
-    corp = db.scalar(select(Corporation).where(Corporation.is_tracked.is_(True)))
+    corp = corps_svc.home_corp(db)
     char = db.get(Character, character_id)
     if not corp or not char or char.corporation_id != corp.corporation_id:
         flash(request, "That character isn't in the tracked corporation.", "error")

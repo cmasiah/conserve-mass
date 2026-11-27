@@ -306,7 +306,7 @@ def store_batch(db: Session, corp_id: int, rows: list[dict], names: dict) -> lis
 
 async def sync_corporation_contracts() -> None:
     with session_scope() as db:
-        corp = db.scalar(select(Corporation).where(Corporation.is_tracked.is_(True)))
+        corp = db.scalar(select(Corporation).where(Corporation.is_home.is_(True)))
         if corp is None or corp.sync_character_id is None:
             log.debug("No tracked corporation yet — log in first.")
             return
