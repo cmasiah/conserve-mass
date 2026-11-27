@@ -27,6 +27,11 @@
   <div class="flash error">Discord bot is not connected yet. {{ pending }} alert(s) pending.</div>
 {% endif %}
 
+{% for f in flagged %}
+  <div class="flash error">⚠️ <a href="/customers/{{ f.character_id }}">{{ f.name or f.character_id }}</a> was auto-muted: {{ f.flag_reason }}.
+    Their contracts are still listed below (marked <em>muted</em>). Review to unmute or block.</div>
+{% endfor %}
+
 <div class="grid">
   <div class="card stat"><div class="label">Awaiting acceptance</div><div class="value">{{ outstanding|length }}</div></div>
   <div class="card stat"><div class="label">In transit</div><div class="value">{{ in_progress|length }}</div></div>
@@ -42,4 +47,6 @@
 
 <h2>In transit</h2>
 {{ contract_table(in_progress, now) }}
+{% if hidden_blocked %}<p class="small muted">{{ hidden_blocked }} open contract(s) from blocked issuers hidden.
+  <a href="/customers?all=1">Manage blocked issuers</a>.</p>{% endif %}
 {% endblock %}

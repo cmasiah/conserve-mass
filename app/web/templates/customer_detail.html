@@ -1,11 +1,12 @@
 {% extends "base.html" %}
-{% from "partials/macros.html" import contract_table %}
+{% from "partials/macros.html" import contract_table, silenced_pill %}
 {% block title %}{{ s.customer.name }} · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <div class="toolbar">
   <img src="https://images.evetech.net/characters/{{ s.customer.character_id }}/portrait?size=64" width="48" height="48" style="border-radius:50%" alt="">
   <h1 style="margin:0">{{ s.customer.name or s.customer.character_id }}</h1>
   {% if s.customer.corporation_name %}<span class="muted">{{ s.customer.corporation_name }}</span>{% endif %}
+  {{ silenced_pill(s.customer) }}
   <span class="spacer"></span>
   <a class="btn" href="https://evewho.com/character/{{ s.customer.character_id }}" target="_blank" rel="noopener">EveWho ↗</a>
   <a class="btn" href="https://zkillboard.com/character/{{ s.customer.character_id }}/" target="_blank" rel="noopener">zKill ↗</a>
@@ -20,11 +21,36 @@
   <div class="card stat"><div class="label">Customer since</div><div class="value" style="font-size:16px">{{ s.customer.first_seen_at | dt }}</div></div>
 </div>
 
+<h2>Notifications &amp; access</h2>
+<div class="card">
+  {% set c = s.customer %}
+  {% if c.blocked %}
+    <p><span class="pill bad">blocked</span> No Discord alerts, hidden from the dashboard, no ESI lookups for their contracts.
+      {% if c.flag_reason %}<br><span class="small muted">Reason: {{ c.flag_reason }} · {{ c.flagged_at | dt }}</span>{% endif %}</p>
+  {% elif c.muted %}
+    <p><span class="pill warn">muted</span> Contracts are tracked, but you won't be pinged about them.
+      {% if c.flag_reason %}<br><span class="small muted">Reason: {{ c.flag_reason }} · {{ c.flagged_at | dt }}</span>{% endif %}</p>
+  {% else %}
+    <p class="small muted">Normal: you get Discord alerts for this customer's contracts.</p>
+  {% endif %}
+  <div class="toolbar">
+    {% macro mod(cid, action, label, cls='', ask='') %}
+      <form class="inline" method="post" action="/customers/{{ cid }}/moderate"
+            {% if ask %}onsubmit="var r=prompt('{{ ask }}', ''); if(r===null) return false; this.reason.value=r;"{% endif %}>
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="{{ action }}">
+        <input type="hidden" name="reason" value=""><button class="{{ cls }}">{{ label }}</button></form>
+    {% endmacro %}
+    {% if c.muted %}{{ mod(c.character_id, 'unmute', 'Unmute') }}{% elif not c.blocked %}{{ mod(c.character_id, 'mute', 'Mute alerts', '', 'Reason for muting (optional):') }}{% endif %}
+    {% if c.blocked %}{{ mod(c.character_id, 'unblock', 'Unblock') }}{% else %}{{ mod(c.character_id, 'block', 'Block', 'danger', 'Reason for blocking (optional):') }}{% endif %}
+  </div>
+  <p class="small muted">The app can't reject contracts in EVE, because ESI doesn't allow it. Blocking stops the noise here; reject or ignore their contracts in-game.</p>
+</div>
+
 <h2>Notes</h2>
 <div class="card">
   <form method="post">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <p><label>Tag <input name="tag" value="{{ s.customer.tag or '' }}" placeholder="vip, blocked, alliance…"></label></p>
+    <p><label>Tag <input name="tag" value="{{ s.customer.tag or '' }}" placeholder="vip, alliance, friend…"></label></p>
     <p><textarea name="notes">{{ s.customer.notes or '' }}</textarea></p>
     <button class="primary">Save</button>
   </form>

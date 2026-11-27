@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/macros.html" import silenced_pill %}
 {% block title %}Customers · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <h1>Customers</h1>
@@ -29,7 +30,8 @@
   {% for s in rows %}
     <tr>
       <td><a href="/customers/{{ s.customer.character_id }}">{{ s.customer.name or s.customer.character_id }}</a>
-        {% if s.completed > 1 %}<span class="pill ok small">returning</span>{% endif %}</td>
+        {% if s.completed > 1 %}<span class="pill ok small">returning</span>{% endif %}
+        {{ silenced_pill(s.customer) }}</td>
       <td class="muted">{{ s.customer.corporation_name or '' }}</td>
       <td class="num">{{ s.completed }}</td>
       <td class="num">{{ s.isk_earned | isk }}</td>

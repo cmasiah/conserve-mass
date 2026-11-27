@@ -19,7 +19,7 @@ from app.security import require_csrf, require_user
 from app.services.backup import run_backup
 from app.services.customers import FINISHED, customer_stats
 from app.services import updater, version
-from app.services.notifier import enqueue
+from app.services.notifier import cancel_for_subject, enqueue
 from app.web.templating import flash, render
 
 router = APIRouter(dependencies=[Depends(require_user)])
@@ -32,10 +32,18 @@ def _redirect(url: str) -> RedirectResponse:
 @router.get("/")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     now = utcnow()
-    outstanding = db.scalars(select(Contract).where(Contract.status == "outstanding")
+    not_blocked = Contract.issuer_id.not_in(
+        select(Customer.character_id).where(Customer.blocked.is_(True)))
+    outstanding = db.scalars(select(Contract).where(Contract.status == "outstanding", not_blocked)
                              .order_by(Contract.date_issued)).all()
-    in_progress = db.scalars(select(Contract).where(Contract.status == "in_progress")
+    in_progress = db.scalars(select(Contract).where(Contract.status == "in_progress", not_blocked)
                              .order_by(Contract.date_accepted)).all()
+    hidden_blocked = db.scalar(select(func.count()).select_from(Contract).where(
+        Contract.status.in_(OPEN_STATUSES), ~not_blocked))
+    flagged = db.scalars(select(Customer).where(Customer.muted.is_(True),
+                                                Customer.flagged_at.is_not(None),
+                                                Customer.flagged_at >= now - timedelta(days=1))
+                         ).all()
     month_ago = now - timedelta(days=30)
     done_30d = db.execute(
         select(func.count(), func.coalesce(func.sum(Contract.reward_isk), 0),
@@ -48,7 +56,8 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
                         .where(Notification.status == "pending"))
     return render(request, "dashboard.html", outstanding=outstanding, in_progress=in_progress,
                   done_30d=done_30d, corp=corp, sync=sync, pending=pending, now=now,
-                  bot_ready=bot.is_ready_for_dm(), bot_configured=bot.configured)
+                  bot_ready=bot.is_ready_for_dm(), bot_configured=bot.configured,
+                  hidden_blocked=hidden_blocked, flagged=flagged)
 
 
 @router.get("/contracts")
@@ -124,6 +133,40 @@ def customer_update(request: Request, character_id: int, tag: str = Form(""),
     cust.notes = notes.strip() or None
     db.commit()
     flash(request, "Customer updated.")
+    return _redirect(f"/customers/{character_id}")
+
+
+@router.post("/customers/{character_id}/moderate")
+def customer_moderate(request: Request, character_id: int, action: str = Form(...),
+                      reason: str = Form(""), csrf: str = Form(""),
+                      db: Session = Depends(get_db)):
+    require_csrf(request, csrf)
+    cust = db.get(Customer, character_id)
+    if not cust or action not in ("mute", "unmute", "block", "unblock"):
+        raise HTTPException(400)
+    who = cust.name or character_id
+    if action in ("mute", "block"):
+        if action == "mute":
+            cust.muted = True
+        else:
+            cust.blocked = True
+        cust.flag_reason = reason.strip() or cust.flag_reason or f"{action}d manually"
+        cust.flagged_at = utcnow()
+        dropped = cancel_for_subject(db, character_id)
+        msg = (f"{who} {'muted' if action == 'mute' else 'blocked'}. "
+               f"{dropped} pending alert(s) dropped.")
+        if action == "block":
+            msg += " Remember to reject their contracts in-game."
+    else:
+        if action == "unblock":
+            cust.blocked = False
+        else:
+            cust.muted = False
+        if not cust.muted and not cust.blocked:
+            cust.flag_reason, cust.flagged_at = None, None
+        msg = f"{who} {'unmuted' if action == 'unmute' else 'unblocked'}."
+    db.commit()
+    flash(request, msg)
     return _redirect(f"/customers/{character_id}")
 
 
