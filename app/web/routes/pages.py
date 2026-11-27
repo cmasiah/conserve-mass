@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db, utcnow
 from app.discord_bot import bot
+from app.esi import usage as esi_usage
 from app.esi.sso import (
     COURIER_SCOPES, CORP_INDUSTRY_SCOPES, PERSONAL_SCOPES, PROFILE_LABELS, SCOPE_PROFILES,
 )
@@ -292,7 +293,8 @@ async def system(request: Request, db: Session = Depends(get_db)):
         if s.backup_dir.exists() else []
     return render(request, "system.html", notes=notes, syncs=syncs, backups=backups,
                   settings=s, bot_ready=bot.is_ready_for_dm(), bot_configured=bot.configured,
-                  ver=await version.check(), upd=updater.status(), now=utcnow())
+                  ver=await version.check(), upd=updater.status(), now=utcnow(),
+                  esi_usage=esi_usage.summary(), esi_expected=sync_info.expected_per_hour(db))
 
 
 @router.post("/system/check-updates")

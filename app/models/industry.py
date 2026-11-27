@@ -71,7 +71,37 @@ class TypeInfo(Base):
     group_id: Mapped[int | None] = mapped_column(BigInteger)
     group_name: Mapped[str | None] = mapped_column(String(128))
     category_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Market group, for sorting blueprints into categories. NULL = not looked up yet,
+    # 0 = the type has none (e.g. some faction BPCs).
+    market_group_id: Mapped[int | None] = mapped_column(BigInteger)
     resolved_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class MarketGroup(Base):
+    """Cached /markets/groups tree (names + parents). Static game data, fetched once."""
+
+    __tablename__ = "market_groups"
+
+    market_group_id: Mapped[int] = mapped_column(BigInteger, primary_key=True,
+                                                 autoincrement=False)
+    name: Mapped[str] = mapped_column(String(128))
+    parent_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class AssetNode(Base):
+    """A place inside an owner's assets that holds other items: a corp office, a
+    container, a ship. Only what's needed to say which structure a blueprint is in."""
+
+    __tablename__ = "asset_nodes"
+
+    item_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    owner_type: Mapped[str] = mapped_column(String(12))
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    parent_id: Mapped[int] = mapped_column(BigInteger)        # where this node sits
+    parent_flag: Mapped[str] = mapped_column(String(32), default="")
+    type_id: Mapped[int] = mapped_column(BigInteger)
+    name: Mapped[str | None] = mapped_column(String(128))     # container's in-game name
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class SkillQueue(Base):

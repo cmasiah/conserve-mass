@@ -108,7 +108,49 @@
   </div>
 </div>
 
-<h2>ESI sync</h2>
+<h2>ESI usage</h2>
+<div class="grid esi-grid">
+  <div class="card">
+    <div class="label small muted">Last hour{{ ' (since restart)' if esi_usage.since_start }}</div>
+    <div class="esi-big">{{ esi_usage.total }} <span class="small muted">calls</span></div>
+    <div class="small">{{ esi_usage.cached }} unchanged (304, half cost) · {{ esi_usage.fresh }} with new data ·
+      <span class="{{ 'bad-text' if esi_usage.errors else '' }}">{{ esi_usage.errors }} error{{ 's' if esi_usage.errors != 1 }}</span></div>
+    <div class="small muted" style="margin-top:6px">Errors in the last minute: {{ esi_usage.errors_last_min }} of CCP's 100 limit.</div>
+    {% if esi_usage.tight %}
+      <div class="small" style="margin-top:8px"><strong>Tightest rate-limit buckets</strong>
+        {% for t in esi_usage.tight %}<div class="mono small">{{ t.group }}: {{ t.remaining }} left of {{ t.limit }}</div>{% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <div class="label small muted">Worst case per hour, current setup</div>
+    <table class="compact small">
+      {% for e in esi_expected %}
+        <tr><td>{{ e.feed }}<div class="muted">{{ e.count }} {{ e.who }}{{ ' · ' ~ e.note if e.note }}</div></td>
+          <td class="num">≤ {{ e.per_hour | round(0) | int }}/h</td></tr>
+      {% endfor %}
+      <tr><td><strong>Total</strong><div class="muted">each character has its own rate-limit bucket at CCP</div></td>
+        <td class="num"><strong>≤ {{ esi_expected | sum(attribute='per_hour') | round(0) | int }}/h</strong></td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <div class="label small muted">Calls by feed, last hour</div>
+    <table class="compact small">
+      {% for r in esi_usage.rows %}
+        <tr><td>{{ r.family }}</td><td class="num">{{ r.total }}</td>
+          <td class="num muted" title="unchanged (304)">{{ r.cached or 0 }} cached</td>
+          <td class="num {{ 'bad-text' if r.error else 'muted' }}">{{ r.error or 0 }} err</td></tr>
+      {% else %}<tr><td class="muted">No ESI calls since the app started.</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+
+<section class="fold" data-fold="sys-esi-keys">
+<button type="button" class="fold-head">
+  <svg class="fold-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+  <span class="fold-title">ESI sync details</span><span class="pill small">{{ syncs | length }}</span>
+</button>
+<div class="fold-body">
 <table>
   <thead><tr><th>Key</th><th>Last success</th><th>Cache expires</th><th>Last error</th></tr></thead>
   <tbody>
@@ -118,6 +160,8 @@
   {% else %}<tr><td colspan="4" class="muted">No syncs yet.</td></tr>{% endfor %}
   </tbody>
 </table>
+</div>
+</section>
 
 <h2>Recent notifications</h2>
 <table>

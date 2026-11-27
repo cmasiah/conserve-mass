@@ -3,5 +3,5 @@ from app.models.core import (  # noqa: F401
 )
 from app.models.couriers import Contract, ContractEvent, Customer  # noqa: F401
 from app.models.industry import (  # noqa: F401
-    Blueprint, CharacterSkill, IndustryJob, SkillQueue, TypeInfo,
+    AssetNode, Blueprint, CharacterSkill, IndustryJob, MarketGroup, SkillQueue, TypeInfo,
 )  # noqa: F401
