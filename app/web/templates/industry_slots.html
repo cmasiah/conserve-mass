@@ -1,60 +1,82 @@
 {% extends "base.html" %}
-{% block title %}Slots & Skills · {{ APP_NAME }}{% endblock %}
+{% block title %}Slots · {{ APP_NAME }}{% endblock %}
+{% macro pips(level) -%}
+  <span class="pips" aria-label="level {{ level }}">{% for i in range(5) %}<i class="{{ 'on' if i < level }}"></i>{% endfor %}</span>
+{%- endmacro %}
 {% macro slotcell(r, cat) -%}
   {%- if not r.has_skills -%}<span class="muted small">no skill data</span>
   {%- else -%}
-    {%- set cap = r.capacity.get(cat, 0) -%}{%- set used = r.used.get(cat, 0) -%}
-    <div class="slotcell">
-      <div class="nums">
-        <strong>{{ cap }}</strong><span class="muted"> / {{ max_slots }}</span>
-        {% if cap >= max_slots %}<span class="pill ok small">max</span>
-        {% elif cap >= 10 %}<span class="pill ok small">10+</span>{% endif %}
-        {% if cat == 'reactions' and cap == 0 %}<span class="pill small" title="Requires the Reactions skill">no Reactions skill</span>{% endif %}
-      </div>
+    {%- set d = detail[r.character.character_id][cat] -%}
+    {%- set cap = d.capacity -%}{%- set used = r.used.get(cat, 0) -%}
+    <div class="tip slotcell" tabindex="0">
       {% if cap %}
-      <div class="meter {{ 'full' if used >= cap }}" title="{{ used }} of {{ cap }} in use"><span style="width: {{ (used / cap * 100) | round(0) }}%"></span></div>
-      <div class="small muted">{{ used }} in use · {{ r.free(cat) }} free</div>
+        <div class="nums"><strong>{{ used }}</strong><span class="muted"> / {{ cap }}</span>
+          <span class="small muted">in use</span></div>
+        <div class="meter {{ 'full' if used >= cap }}"><span style="width: {{ (used / cap * 100) | round(0) }}%"></span></div>
+      {% else %}
+        <div class="nums muted">—</div>
       {% endif %}
+      <div class="tip-body">
+        <div class="tip-head">{{ labels[cat] }} · {{ cap }} slot{{ 's' if cap != 1 }}{% if cat == 'reactions' and not cap %} (needs Reactions){% endif %}</div>
+        {% for s in d.rows %}
+          <div class="tip-row"><span>{{ s.name }}</span>{{ pips(s.level) }}<span class="tip-note">{{ s.note }}</span></div>
+        {% endfor %}
+        <div class="tip-row tip-remote"><span>{{ d.remote.name }}</span>{{ pips(d.remote.level) }}<span class="tip-note">{{ d.remote.reach }}</span></div>
+      </div>
     </div>
   {%- endif -%}
 {%- endmacro %}
 {% block content %}
 <div class="toolbar">
-  <h1 style="margin:0">Slots &amp; Skills</h1>
+  <h1 style="margin:0">Slots</h1>
   <span class="spacer"></span>
+  {% if missing %}
+  <span class="tip" tabindex="0">
+    <a class="pill warn" href="/auth/login?profile=industry">{{ missing | length }} character{{ 's' if missing | length != 1 }} need{{ 's' if missing | length == 1 }} industry access</a>
+    <span class="tip-body tip-left">
+      <span class="tip-head">Re-link while logged in as each character in-game</span>
+      {% for c, scopes in missing %}<span class="tip-row"><span>{{ c.name }}</span><span class="tip-note">missing {{ scopes | length }} scope{{ 's' if scopes | length != 1 }}</span></span>{% endfor %}
+    </span>
+  </span>
+  {% endif %}
   <form class="inline" method="post" action="/industry/sync-now">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/industry/slots">
     <button>Sync now</button></form>
 </div>
 
-<div class="grid">
-  {% for c in cats %}
-    {% set cap, used = totals[c] %}
-    <div class="card stat"><div class="label">{{ c }} slots</div>
-      <div class="value">{{ cap - used }}<span class="muted" style="font-size:14px"> free of {{ cap }}</span></div></div>
+<div class="grid cmd">
+  <div class="card stat"><div class="label">Characters tracked</div>
+    <div class="value">{{ tracked }}</div>
+    <div class="small muted">{{ synced }} with skills synced · {{ capital_builders }} capital builder{{ 's' if capital_builders != 1 }}</div></div>
+  {% for c in cats %}{% set t = totals[c] %}
+  <a class="card stat link" href="?sort={{ c }}"><div class="label">{{ labels[c] }} free</div>
+    <div class="value">{{ t.free }}<span class="small muted"> / {{ t.cap }}</span></div>
+    <div class="meter {{ 'full' if t.cap and t.used >= t.cap }}" style="margin-top:6px"><span style="width: {{ ((t.used / t.cap * 100) if t.cap else 0) | round(0) }}%"></span></div>
+    <div class="small muted">{{ t.used }} in use</div></a>
   {% endfor %}
 </div>
 
 <div class="toolbar" style="margin-top:16px">
   <div class="tabs">
-    Show:
     <a href="?sort={{ sort }}" class="{{ 'active' if not only }}">All</a>
     <a href="?sort={{ sort }}&only=manufacturing" class="{{ 'active' if only == 'manufacturing' }}">10+ manufacturing</a>
-    <a href="?sort={{ sort }}&only=science" class="{{ 'active' if only == 'science' }}">10+ science</a>
+    <a href="?sort={{ sort }}&only=science" class="{{ 'active' if only == 'science' }}">10+ research</a>
     <a href="?sort={{ sort }}&only=reactions" class="{{ 'active' if only == 'reactions' }}">10+ reactions</a>
     <a href="?sort={{ sort }}&only=capital" class="{{ 'active' if only == 'capital' }}">Capital builders</a>
   </div>
+  <span class="spacer"></span>
+  <span class="small muted">Hover a slot count for the skills behind it.</span>
 </div>
 
 {% if rows %}
-<table>
+<table class="slots-table">
   <thead><tr>
     <th><a href="?sort=name&only={{ only }}">Character</a></th>
     <th><a href="?sort=manufacturing&only={{ only }}">Manufacturing</a></th>
-    <th><a href="?sort=science&only={{ only }}">Science</a></th>
+    <th><a href="?sort=science&only={{ only }}">Research</a></th>
     <th><a href="?sort=reactions&only={{ only }}">Reactions</a></th>
-    <th><a href="?sort=capital&only={{ only }}">Capital Ship Construction</a></th>
-    <th>Skills synced</th>
+    <th><a href="?sort=capital&only={{ only }}">Capital</a></th>
+    <th>Synced</th>
   </tr></thead>
   <tbody>
   {% for r in rows %}
@@ -65,9 +87,17 @@
       <td>{{ slotcell(r, 'science') }}</td>
       <td>{{ slotcell(r, 'reactions') }}</td>
       <td>{% if r.has_skills %}
-            <strong>{{ 'Level ' ~ r.capital_level if r.capital_level else '—' }}</strong>
-            {% if r.capital_level %}<div class="small">
-              <span class="pill {{ 'ok' if r.capital_level >= 4 else ('warn' if r.capital_level >= 3 else '') }} small">{{ r.capital_label }}</span></div>{% endif %}
+            <span class="tip" tabindex="0">
+              {% if r.capital_level %}<span class="pill {{ 'ok' if r.capital_level >= 4 else ('warn' if r.capital_level >= 3 else '') }} small">{{ r.capital_label }}</span>
+              {% else %}<span class="muted">—</span>{% endif %}
+              <span class="tip-body tip-left">
+                <span class="tip-head">Capital Ship Construction</span>
+                <span class="tip-row"><span>Current level</span>{{ pips(r.capital_level) }}</span>
+                {% for lvl in [1, 3, 4, 5] %}
+                  <span class="tip-row {{ 'tip-done' if r.capital_level >= lvl else 'muted' }}"><span>Level {{ lvl }}</span><span class="tip-note">{{ tiers[lvl] }}</span></span>
+                {% endfor %}
+              </span>
+            </span>
           {% else %}<span class="muted small">no skill data</span>{% endif %}</td>
       <td class="small muted">{{ r.skills_updated | delta(now) if r.skills_updated else '—' }}</td>
     </tr>
@@ -75,20 +105,4 @@
   </tbody>
 </table>
 {% else %}<div class="card empty">No characters match.</div>{% endif %}
-
-<p class="small muted">Slots = 1 base + Mass Production + Advanced Mass Production (manufacturing),
-  Laboratory Operation + Advanced Laboratory Operation (science), Mass Reactions + Advanced Mass Reactions (reactions; needs the Reactions skill).
-  Both skills at V = 11. Active skill levels are used, so an alpha clone shows what it can actually run.
-  Capital Ship Construction: I components · III most capitals · IV jump freighters &amp; supercarriers · V titans.</p>
-
-{% if missing %}
-<h2>Characters missing industry access</h2>
-<div class="card">
-  <p class="small">These characters haven't granted the industry scopes yet, so their skills, jobs or blueprints can't be read.
-    Make sure the scopes are enabled on your EVE developer app first, then <a href="/auth/login?profile=industry">re-link with industry scopes</a> while logged in as each character in-game.</p>
-  {% for c, scopes in missing %}
-    <div class="small"><strong>{{ c.name }}</strong> <span class="muted">missing {{ scopes | length }}: {{ scopes | join(', ') }}</span></div>
-  {% endfor %}
-</div>
-{% endif %}
 {% endblock %}

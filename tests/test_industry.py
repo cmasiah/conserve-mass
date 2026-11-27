@@ -59,3 +59,34 @@ def test_character_overview_reads_skills_and_jobs(db):
     assert b.free("manufacturing") == 10
     assert b.capital_level == 4 and "Jump freighters" in b.capital_label
     assert not rows["Fresh Alt"].has_skills  # no data yet, shown as such rather than as 1 slot
+
+
+def test_identical_blueprints_merge_into_one_line_with_count():
+    from app.web.routes.industry import aggregate_blueprints
+    B = lambda t, q=-2, me=10, te=20, runs=5: SimpleNamespace(
+        type_id=t, quantity=q, material_efficiency=me, time_efficiency=te, runs=runs,
+        is_copy=(q == -2))
+    items = [{"b": B(1), "name": "Charon BPC"} for _ in range(40)]
+    items += [{"b": B(1, runs=1), "name": "Charon BPC"}]                 # different runs
+    items += [{"b": B(2, q=-1, runs=-1), "name": "Rifter BP"},
+              {"b": B(2, q=3, runs=-1), "name": "Rifter BP"}]            # stack of 3 BPOs
+    lines = aggregate_blueprints(items)
+    assert sorted((x["name"], x["count"]) for x in lines) == [
+        ("Charon BPC", 1), ("Charon BPC", 40), ("Rifter BP", 4)]
+
+
+def test_slot_breakdown_lists_skills_and_remote_range():
+    from app.services.industry import slot_breakdown
+    lv = {"Reactions": 4, "Mass Reactions": 5, "Advanced Mass Reactions": 4, "Remote Reactions": 2,
+          "Mass Production": 4, "Advanced Mass Production": 2}
+    r = slot_breakdown(lv, "reactions")
+    assert r["capacity"] == 10
+    assert [x["name"] for x in r["rows"]] == ["Reactions", "Mass Reactions",
+                                             "Advanced Mass Reactions"]
+    assert r["remote"]["name"] == "Remote Reactions" and r["remote"]["reach"] == "within 10 jumps"
+    m = slot_breakdown(lv, "manufacturing")
+    assert m["capacity"] == 7                                   # this character's max, not 11
+    assert m["remote"]["reach"] == "current system only"        # no Supply Chain Management
+    assert slot_breakdown({"Scientific Networking": 3}, "science")["remote"]["reach"] \
+        == "within 15 jumps"
+    assert slot_breakdown({}, "reactions")["capacity"] == 0     # no Reactions skill

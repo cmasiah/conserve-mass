@@ -5,7 +5,7 @@
 <div class="toolbar">
   <h1 style="margin:0">Home</h1>
   <span class="spacer"></span>
-  <span class="small muted">{{ now | dt }} UTC</span>
+  <span class="small muted">{{ now | dt }}</span>
 </div>
 
 {# Needs attention: only shown when something does #}
@@ -80,7 +80,7 @@
         <a href="/characters">Characters</a>.</p>
     {% else %}
     <div class="grid">
-      {% for cat, label in [("manufacturing", "Manufacturing"), ("science", "Science"), ("reactions", "Reactions")] %}
+      {% for cat, label in [("manufacturing", "Manufacturing"), ("science", "Research"), ("reactions", "Reactions")] %}
       <a class="card stat link" href="/industry/slots"><div class="label">{{ label }} slots free</div>
         <div class="value">{{ industry.free[cat] }}<span class="small muted"> / {{ industry.total[cat] }}</span></div></a>
       {% endfor %}

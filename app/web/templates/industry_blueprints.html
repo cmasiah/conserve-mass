@@ -3,7 +3,7 @@
 {% block content %}
 <div class="toolbar">
   <h1 style="margin:0">Blueprint Library</h1>
-  <span class="muted">{{ total }} blueprint{{ 's' if total != 1 }}</span>
+  <span class="muted">{{ total }} blueprint{{ 's' if total != 1 }}{% if combine and lines != total %} · {{ lines }} unique{% endif %}</span>
   <span class="spacer"></span>
   <form class="inline" method="post" action="/industry/sync-now">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/industry/blueprints">
@@ -21,26 +21,43 @@
     <option value="bpo" {{ 'selected' if kind == 'bpo' }}>Originals (BPO)</option>
     <option value="bpc" {{ 'selected' if kind == 'bpc' }}>Copies (BPC)</option>
   </select>
+  <label class="small" style="display:flex;align-items:center;gap:6px">
+    <input type="hidden" name="combine" value="0">
+    <input type="checkbox" name="combine" value="1" {{ 'checked' if combine }} onchange="this.form.submit()">
+    Combine identical
+  </label>
   <button>Filter</button>
+  {% if groups %}
+  <span class="spacer"></span>
+  <button type="button" class="small" onclick="document.querySelectorAll('details.bp-group').forEach(d => d.open = true)">Expand all</button>
+  <button type="button" class="small" onclick="document.querySelectorAll('details.bp-group').forEach(d => d.open = false)">Collapse all</button>
+  {% endif %}
 </form>
 
-{% for group, items in groups.items() %}
-  <h2>{{ group }} <span class="muted">({{ items | length }})</span></h2>
-  <table>
-    <thead><tr><th>Blueprint</th><th>Type</th><th class="num">ME</th><th class="num">TE</th><th class="num">Runs</th><th class="num">Qty</th></tr></thead>
-    <tbody>
-    {% for it in items %}{% set b = it.b %}
-      <tr>
-        <td><img src="https://images.evetech.net/types/{{ b.type_id }}/{{ 'bpc' if b.is_copy else 'bp' }}?size=32" width="24" height="24" style="vertical-align:middle" alt=""> {{ it.name }}</td>
-        <td>{% if b.is_copy %}<span class="pill small">copy</span>{% else %}<span class="pill ok small">original</span>{% endif %}</td>
-        <td class="num">{{ b.material_efficiency }}</td>
-        <td class="num">{{ b.time_efficiency }}</td>
-        <td class="num">{{ '∞' if b.runs == -1 else b.runs }}</td>
-        <td class="num">{{ b.quantity if b.quantity > 0 else 1 }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+{% for group, g in groups.items() %}
+  <details class="bp-group" {{ 'open' if q or groups | length <= 2 }}>
+    <summary>
+      <svg class="bp-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      <span class="bp-title">{{ group }}</span>
+      <span class="pill small">{{ g.total }} blueprint{{ 's' if g.total != 1 }}</span>
+      {% if combine and g.lines | length != g.total %}<span class="small muted">{{ g.lines | length }} unique</span>{% endif %}
+    </summary>
+    <table>
+      <thead><tr><th>Blueprint</th><th>Type</th><th class="num">ME</th><th class="num">TE</th><th class="num">Runs</th><th class="num">Count</th></tr></thead>
+      <tbody>
+      {% for it in g.lines %}{% set b = it.b %}
+        <tr>
+          <td><img src="https://images.evetech.net/types/{{ b.type_id }}/{{ 'bpc' if b.is_copy else 'bp' }}?size=32" width="24" height="24" style="vertical-align:middle" alt="" loading="lazy"> {{ it.name }}</td>
+          <td>{% if b.is_copy %}<span class="pill small">copy</span>{% else %}<span class="pill ok small">original</span>{% endif %}</td>
+          <td class="num">{{ b.material_efficiency }}</td>
+          <td class="num">{{ b.time_efficiency }}</td>
+          <td class="num">{{ '∞' if not b.is_copy else b.runs }}</td>
+          <td class="num">{% if it.count > 1 %}<span class="bp-count">×{{ it.count }}</span>{% else %}1{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </details>
 {% else %}
   <div class="card empty">No blueprints{{ ' match "' ~ q ~ '"' if q }}. Corp hangars need
     <code>esi-corporations.read_blueprints.v1</code> on a Director; personal blueprints need

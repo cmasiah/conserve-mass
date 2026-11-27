@@ -55,8 +55,19 @@ CAPITAL_TIERS = {
     4: "Jump freighters & supercarriers",
     5: "Titans",
 }
+# Remote-start skills: without them, jobs can only be started in your current system.
+REMOTE_SKILLS = {
+    "manufacturing": "Supply Chain Management",
+    "science": "Scientific Networking",
+    "reactions": "Remote Reactions",
+}
+# All three: +5 jumps per level, 25 at V; untrained = current system only.
+REMOTE_JUMPS_PER_LEVEL = {"Supply Chain Management": 5, "Scientific Networking": 5,
+                          "Remote Reactions": 5}
+CATEGORY_LABELS = {"manufacturing": "Manufacturing", "science": "Research",
+                   "reactions": "Reactions"}
 TRACKED_SKILLS = {s for pair in SLOT_SKILLS.values() for s in pair} | {
-    REACTIONS_PREREQ, CAPITAL_SKILL, "Industry", "Advanced Industry"}
+    REACTIONS_PREREQ, CAPITAL_SKILL, "Industry", "Advanced Industry"} | set(REMOTE_SKILLS.values())
 
 # ESI activity_id -> slot category
 ACTIVITY_CATEGORY = {1: "manufacturing", 3: "science", 4: "science", 5: "science",
@@ -73,6 +84,29 @@ def slot_capacity(levels: dict[str, int]) -> dict[str, int]:
     if levels.get(REACTIONS_PREREQ, 0) == 0:
         out["reactions"] = 0
     return out
+
+
+def slot_breakdown(levels: dict[str, int], cat: str) -> dict:
+    """What a slot count is made of, for the hover on the Slots page."""
+    base, adv = SLOT_SKILLS[cat]
+    rows = []
+    if cat == "reactions":
+        lvl = levels.get(REACTIONS_PREREQ, 0)
+        rows.append({"name": REACTIONS_PREREQ, "level": lvl,
+                     "note": "required" if lvl else "required — not trained"})
+    rows.append({"name": base, "level": levels.get(base, 0), "note": "+1 slot / level"})
+    rows.append({"name": adv, "level": levels.get(adv, 0), "note": "+1 slot / level"})
+    remote = REMOTE_SKILLS[cat]
+    rl = levels.get(remote, 0)
+    per = REMOTE_JUMPS_PER_LEVEL.get(remote)
+    if rl == 0:
+        reach = "current system only"
+    elif per:
+        reach = f"within {rl * per} jumps"
+    else:
+        reach = f"level {rl} remote range"
+    return {"rows": rows, "remote": {"name": remote, "level": rl, "reach": reach},
+            "capacity": slot_capacity(levels)[cat]}
 
 
 def capital_tier(levels: dict[str, int]) -> tuple[int, str]:

@@ -13,7 +13,10 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters.update(isk=fmt_isk, m3=fmt_m3, dt=fmt_dt, delta=fmt_delta)
 templates.env.globals.update(APP_NAME=APP_NAME, APP_VERSION=APP_VERSION,
                              WORK_STATUSES=WORK_STATUSES,
-                             version_info=version.cached)  # cached only, never blocks
+                             version_info=version.cached,  # cached only, never blocks
+                             # Changes with every build, so browsers fetch fresh CSS/icons
+                             # after an update instead of reusing a stale cached copy.
+                             ASSET_V=(version.GIT_SHA[:10] or APP_VERSION))
 
 
 def csrf_token(request: Request) -> str:
