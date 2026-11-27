@@ -71,6 +71,8 @@ bash update.sh
 ```
 Using the Unraid Docker tab instead? Copy `unraid/conserve-mass.xml` to `/boot/config/plugins/dockerMan/templates-user/`.
 
+The compose file sets Unraid labels, so the Docker tab shows the app's icon and a **WebUI** entry in the container's menu. To make WebUI open your proxy hostname instead of `IP:port`, set the `net.unraid.docker.webui` label in your `docker-compose.override.yml` (see the example file).
+
 ### Nginx Proxy Manager
 Add a Proxy Host with:
 - Forward Hostname: `conserve-mass`
