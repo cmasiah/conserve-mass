@@ -1,0 +1,34 @@
+# Conserve Mass Ops — Unraid deployment
+# Image is built by GitHub Actions and published to GHCR on every push to main.
+#
+# First run / update (from this folder on Unraid):
+#   docker compose pull && docker compose up -d
+# Or simply:  bash update.sh
+#
+# Pin a version instead of latest to roll back, e.g. ghcr.io/cmasiah/conserve-mass:0.2.0
+services:
+  conserve-mass:
+    image: ghcr.io/cmasiah/conserve-mass:latest
+    # To build locally instead of pulling, uncomment:
+    # build: .
+    container_name: conserve-mass
+    restart: unless-stopped
+    environment:
+      - PUID=99
+      - PGID=100
+      - UMASK=022
+      - TZ=America/Chicago
+    env_file:
+      - /mnt/user/appdata/conserve-mass/.env
+    volumes:
+      # appdata share must be cache-only with "Exclusive shares" enabled
+      # (or use /mnt/cache/appdata/conserve-mass) — SQLite + FUSE don't mix.
+      - /mnt/user/appdata/conserve-mass:/config
+    ports:
+      - "8484:8000"
+    networks:
+      - connectfour
+
+networks:
+  connectfour:
+    external: true

@@ -1,0 +1,19 @@
+# Only what the Dockerfile COPYs is needed; everything sensitive stays out.
+.git
+.github
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+*.log
+*.zip
+config
+backups
+logs
+uploads
+tests
+__pycache__
+.pytest_cache
+.venv
