@@ -40,7 +40,9 @@ KINDS: list[Kind] = [
          "An issuer was auto-muted for posting too many contracts.", "Safety & system"),
     Kind("token_invalid", "ESI login expired",
          "A character's ESI access was revoked and needs re-linking.", "Safety & system"),
-    Kind("update_available", "New app version available", "", "Safety & system"),
+    Kind("update_available", "New main release",
+         "Once per new version published to main (stable). Beta builds never ping.",
+         "Safety & system"),
 ]
 KIND_BY_KEY = {k.key: k for k in KINDS}
 ALWAYS_ON = {"test"}  # the System page's test DM

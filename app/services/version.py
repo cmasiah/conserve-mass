@@ -153,17 +153,60 @@ async def check(force: bool = False) -> VersionInfo:
     return info
 
 
+RELEASE_SEEN_KEY = "release_notified"   # settings row: highest main version already pinged
+
+
+async def main_release() -> tuple[str | None, bool]:
+    """(APP_VERSION on main, whether its :<version> image is published)."""
+    repo = get_settings().update_repo
+    headers = {"User-Agent": get_settings().user_agent}
+    async with httpx.AsyncClient(timeout=10, headers=headers) as client:
+        r = await client.get(f"https://raw.githubusercontent.com/{repo}/main/app/config.py")
+        r.raise_for_status()
+        m = _VERSION_RE.search(r.text)
+        if not m:
+            return None, False
+        return m.group(1), await image_published(client, repo, m.group(1))
+
+
+def release_to_announce(main_version: str | None, image_ready: bool,
+                        seen: str | None) -> str | None:
+    """The main version to DM about, if any. First run only records a baseline."""
+    if not main_version or not image_ready or seen is None:
+        return None
+    return main_version if parse_version(main_version) > parse_version(seen) else None
+
+
 async def version_job() -> None:
-    """Scheduled: refresh the cache and DM once per new version."""
-    info = await check(force=True)
-    if not info.update_available:
+    """Scheduled: refresh the System page's update info, and DM once per new MAIN release.
+
+    Beta commits never ping, even on the beta channel: you're the one merging them.
+    A new APP_VERSION reaching main (a promotion) pings once, on either channel."""
+    await check(force=True)
+    try:
+        version, ready = await main_release()
+    except httpx.HTTPError as e:
+        log.info("Main release check failed: %s", e)
+        return
+    if not version:
         return
     from app.db import session_scope
+    from app.models import Setting
     from app.services.notifier import enqueue
-    changes = "\n".join(f"• {c['message']}" for c in info.commits[:5])
     with session_scope() as db:
-        enqueue(db, ref=f"version:{info.latest_label}", kind="update_available",
-                title=f"⬆️ Conserve Mass Ops {info.latest_label} is available",
-                body=f"You're running {info.current_label}.\n\n{changes}\n\n"
-                     f"Update from the System page.",
-                url=f"{get_settings().base_url}/system")
+        row = db.get(Setting, RELEASE_SEEN_KEY)
+        if row is None:
+            db.add(Setting(key=RELEASE_SEEN_KEY, value=version))  # baseline, no ping
+            return
+        new = release_to_announce(version, ready, row.value)
+        if new is None:
+            return
+        row.value = new
+        if CHANNEL == "stable":
+            body = (f"You're running {APP_VERSION}. Update from the System page.")
+        else:
+            body = (f"Promoted to main (the stable :latest image). You're on beta "
+                    f"({_cache.current_label}), which already has everything in it.")
+        enqueue(db, ref=f"release:{new}", kind="update_available",
+                title=f"🚀 Conserve Mass Ops {new} released", body=body,
+                url=f"https://github.com/{get_settings().update_repo}/tree/main")
