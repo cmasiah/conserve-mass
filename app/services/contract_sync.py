@@ -220,13 +220,67 @@ def queue_deadline_alerts(db: Session) -> None:
             _alert(db, c, "delivery_due", "⏰ Delivery deadline approaching")
 
 
-async def _enrich_names(db: Session, results: list[ApplyResult]) -> None:
-    """Customer + corp names: one batched ESI call per 1000 unknown IDs."""
+# ---------------------------------------------------------------- sync
+#
+# Shape of a sync (see "Locking rules" in app/db.py):
+#   1. network: token + contracts from ESI
+#   2. network: names and station/structure names for those contracts (cache tables only)
+#   3. one quick transaction, no awaits: store contracts, mute spammers, queue alerts
+# Step 3 is all-or-nothing, so a failure never leaves contracts stored without their
+# alerts, and nothing holds the database while waiting on CCP.
+
+
+def courier_rows(corp_id: int, data: list[dict]) -> list[dict]:
+    return [r for r in data if r.get("type") == "courier" and r.get("assignee_id") == corp_id]
+
+
+def quiet_issuers(db: Session, corp_id: int, rows: list[dict]) -> set[int]:
+    """Issuers not worth location lookups: already muted/blocked, or about to be
+    auto-muted by this batch (same rule as detect_spam, worked out before storing)."""
+    limit = get_settings().spam_contracts_per_hour
+    since = utcnow() - timedelta(hours=1)
+    known = set(db.scalars(select(Contract.contract_id).where(
+        Contract.corporation_id == corp_id)))
+    new_recent: dict[int, int] = {}
+    for r in rows:
+        issued = _dt(r.get("date_issued"))
+        if r["contract_id"] not in known and issued and issued >= since:
+            new_recent[r["issuer_id"]] = new_recent.get(r["issuer_id"], 0) + 1
+    quiet: set[int] = set()
+    for issuer_id in {r["issuer_id"] for r in rows}:
+        cust = db.get(Customer, issuer_id)
+        if cust is not None and cust.silenced:
+            quiet.add(issuer_id)
+        elif issuer_id in new_recent:
+            stored = db.scalar(select(func.count()).select_from(Contract).where(
+                Contract.issuer_id == issuer_id, Contract.date_issued >= since))
+            if stored + new_recent[issuer_id] > limit:
+                quiet.add(issuer_id)
+    return quiet
+
+
+async def _prefetch(db: Session, corp_id: int, rows: list[dict], token: str) -> dict:
+    """All ESI lookups the batch needs, before anything is stored. Only touches the
+    name/location caches, which are safe to keep even if the rest fails."""
     ids: set[int] = set()
-    for r in results:
-        ids |= {r.contract.issuer_id, r.contract.issuer_corp_id or 0,
-                r.contract.acceptor_id or 0}
+    for r in rows:
+        ids |= {r["issuer_id"], r.get("issuer_corporation_id") or 0, r.get("acceptor_id") or 0}
+    # Customer + corp names: one batched ESI call per 1000 unknown IDs.
     names = await resolver.resolve_names(db, ids)
+    # Station/structure names: capped per sync, and never for muted/blocked issuers or a
+    # spam flood, so junk contracts can't fan out into ESI calls.
+    quiet = quiet_issuers(db, corp_id, rows)
+    budget = resolver.LookupBudget(get_settings().max_location_lookups_per_sync)
+    for r in rows:
+        if r["issuer_id"] in quiet:
+            continue
+        for loc_id in (r.get("start_location_id"), r.get("end_location_id")):
+            await resolver.resolve_location(db, loc_id, token, budget)
+    db.commit()
+    return names
+
+
+def _apply_names(db: Session, results: list[ApplyResult], names: dict) -> None:
     for r in results:
         cust = r.contract.customer or db.get(Customer, r.contract.issuer_id)
         if cust:
@@ -238,16 +292,16 @@ async def _enrich_names(db: Session, results: list[ApplyResult]) -> None:
     db.flush()
 
 
-async def _enrich_locations(db: Session, results: list[ApplyResult], token: str) -> None:
-    """Station/structure names: capped per sync, skipped for muted/blocked issuers."""
-    budget = resolver.LookupBudget(get_settings().max_location_lookups_per_sync)
-    for r in results:
-        cust = r.contract.customer
-        if cust and cust.silenced:
-            continue
-        for loc_id in (r.contract.start_location_id, r.contract.end_location_id):
-            await resolver.resolve_location(db, loc_id, token, budget)
+def store_batch(db: Session, corp_id: int, rows: list[dict], names: dict) -> list[ApplyResult]:
+    """Step 3: synchronous on purpose (no awaits), so it's one short transaction."""
+    results = [r for raw in rows if (r := apply_contract(db, corp_id, raw))]
     db.flush()
+    _apply_names(db, results, names)
+    detect_spam(db, {r.contract.issuer_id for r in results if r.is_new})
+    for r in results:
+        db.refresh(r.contract)
+        _queue_alerts(db, r)
+    return results
 
 
 async def sync_corporation_contracts() -> None:
@@ -257,33 +311,32 @@ async def sync_corporation_contracts() -> None:
             log.debug("No tracked corporation yet — log in first.")
             return
         corp_id = corp.corporation_id
+        key = f"corp_contracts:{corp_id}"
         try:
             token = await esi.access_token(db, corp.sync_character_id)
-            res = await esi.get_cached_paged(
-                db, f"corp_contracts:{corp_id}", f"/corporations/{corp_id}/contracts",
-                token=token)
+            res = await esi.get_cached_paged(db, key, f"/corporations/{corp_id}/contracts",
+                                             token=token)
         except (esi.EsiError, esi.NoValidToken) as e:
             log.warning("Contract sync failed: %s", e)
             db.commit()  # persist sync_state.last_error
             return
 
-        key = f"corp_contracts:{corp_id}"
         try:
             if not res.not_modified:
-                results = [r for raw in res.data if (r := apply_contract(db, corp_id, raw))]
-                db.flush()
-                await _enrich_names(db, results)
-                # Spam check before location lookups and alerts, so a flood never
-                # fans out into ESI calls or Discord pings.
-                detect_spam(db, {r.contract.issuer_id for r in results if r.is_new})
-                await _enrich_locations(db, results, token)
-                for r in results:
-                    db.refresh(r.contract)
-                    _queue_alerts(db, r)
-                new = sum(r.is_new for r in results)
-                changed = sum(bool(r.changes) for r in results)
+                # Hold the new ETag back until the contracts are stored, so a crash in
+                # between makes the next run refetch instead of seeing "not modified".
+                state = db.get(SyncState, key)
+                etag, expires = state.etag, state.expires_at
+                state.etag, state.expires_at = None, None
+                rows = courier_rows(corp_id, res.data)
+                names = await _prefetch(db, corp_id, rows, token)
+
+                results = store_batch(db, corp_id, rows, names)
+                state = db.get(SyncState, key)
+                state.etag, state.expires_at = etag, expires
                 log.info("Contracts synced: %d courier rows, %d new, %d changed",
-                         len(results), new, changed)
+                         len(results), sum(r.is_new for r in results),
+                         sum(bool(r.changes) for r in results))
             queue_deadline_alerts(db)
             db.commit()
         except Exception as e:  # noqa: BLE001 — record any processing failure, retry next run

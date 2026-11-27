@@ -11,6 +11,7 @@ import jwt
 from jwt import PyJWKClient
 
 from app.config import get_settings
+from app.db import release_write_lock
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ def _validate_jwt(access_token: str) -> dict:
 
 async def _token_request(data: dict) -> TokenResult:
     s = get_settings()
+    release_write_lock("EVE SSO")  # never wait on the network holding the DB write lock
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.post(
             TOKEN_URL,

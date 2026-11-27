@@ -239,7 +239,7 @@ async def sync_skills() -> None:
                                       trained_level=s.get("trained_skill_level", 0),
                                       active_level=s.get("active_skill_level", 0),
                                       updated_at=now))
-            db.flush()
+            db.commit()  # skills + ETag together, before the name lookup goes to ESI
             # Skill names: one batched call the first time, cached forever after.
             await resolver.resolve_names(db, {s["skill_id"] for s in skills})
             db.commit()
@@ -259,6 +259,7 @@ async def sync_skills() -> None:
             if res.not_modified:
                 continue
             store_skill_queue(db, cid, res.data or [])
+            db.commit()
             await resolver.resolve_names(db, {e["skill_id"] for e in (res.data or [])})
             db.commit()
 
@@ -334,6 +335,9 @@ async def sync_jobs() -> None:
                 _replace_jobs(db, "character", cid, res.data)
                 type_ids |= {j.get("product_type_id") or 0 for j in res.data}
                 type_ids |= {j.get("blueprint_type_id") or 0 for j in res.data}
+            # One owner at a time: its jobs and ETag land together, and the write lock
+            # is released before the next character's ESI call.
+            db.commit()
 
         for corp_id in _tracked_corp_ids(db):
             token = await _corp_token(db, corp_id, SCOPE_CORP_JOBS)
@@ -352,6 +356,7 @@ async def sync_jobs() -> None:
                 _replace_jobs(db, "corporation", corp_id, res.data)
                 type_ids |= {j.get("product_type_id") or 0 for j in res.data}
                 type_ids |= {j.get("blueprint_type_id") or 0 for j in res.data}
+            db.commit()
 
         installers = {j.installer_id for j in db.scalars(select(IndustryJob))}
         await resolver.resolve_names(db, type_ids | installers)
@@ -439,6 +444,7 @@ async def _sync_divisions(db: Session, corp_id: int) -> None:
         row = db.get(Setting, key) or Setting(key=key, value="")
         row.value = d.get("name") or f"Division {d['division']}"
         db.add(row)
+    db.commit()
 
 
 def division_names(db: Session, corp_id: int) -> dict[str, str]:
@@ -466,6 +472,7 @@ async def sync_blueprints() -> None:
             if not res.not_modified:
                 _replace_blueprints(db, "character", cid, res.data)
                 type_ids |= {b["type_id"] for b in res.data}
+            db.commit()  # per owner: blueprints + ETag together, lock released
 
         for corp_id in _tracked_corp_ids(db):
             await _sync_divisions(db, corp_id)
@@ -485,6 +492,7 @@ async def sync_blueprints() -> None:
                 _replace_blueprints(db, "corporation", corp_id, res.data)
                 type_ids |= {b["type_id"] for b in res.data}
                 log.info("Corp blueprints synced: %d", len(res.data))
+            db.commit()
 
         await resolver.resolve_names(db, type_ids)
         db.commit()

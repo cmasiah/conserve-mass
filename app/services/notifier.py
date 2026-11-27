@@ -20,7 +20,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db import session_scope, utcnow
+from app.db import release_write_lock, session_scope, utcnow
 from app.models import Notification
 
 log = logging.getLogger(__name__)
@@ -159,6 +159,7 @@ async def dispatch_pending() -> None:
             for n in msg.items:
                 n.attempts += 1
             try:
+                release_write_lock("Discord send")
                 await bot.send_owner(title, body, url, msg.kind)
                 _sent_times.append(time.monotonic())
                 sent_at = utcnow()   # one timestamp per message, so a digest stays groupable
