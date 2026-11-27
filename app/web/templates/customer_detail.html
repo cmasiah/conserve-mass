@@ -12,11 +12,11 @@
 </div>
 
 <div class="grid">
-  <div class="card stat"><div class="label">Contracts</div><div class="value">{{ s.total }}</div></div>
   <div class="card stat"><div class="label">Delivered</div><div class="value">{{ s.completed }}</div></div>
-  <div class="card stat"><div class="label">Failed</div><div class="value">{{ s.failed }}</div></div>
   <div class="card stat"><div class="label">ISK earned</div><div class="value">{{ s.isk_earned | isk }}</div></div>
   <div class="card stat"><div class="label">Volume moved</div><div class="value">{{ s.total_m3 | m3 }}</div></div>
+  <div class="card stat"><div class="label">Failed</div><div class="value">{{ s.failed }}</div></div>
+  <div class="card stat"><div class="label">Withdrawn</div><div class="value">{{ s.withdrawn }}</div></div>
   <div class="card stat"><div class="label">Customer since</div><div class="value" style="font-size:16px">{{ s.customer.first_seen_at | dt }}</div></div>
 </div>
 

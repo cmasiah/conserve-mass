@@ -67,12 +67,36 @@ def test_notifications_are_deduplicated(db):
     assert len(db.scalars(select(Notification)).all()) == 1
 
 
-def test_customer_stats(db):
+def test_customer_stats_count_delivered_only(db):
     from app.services.contract_sync import apply_contract
     from app.services.customers import customer_stats
 
     apply_contract(db, CORP, raw_contract(contract_id=1, status="finished"))
     apply_contract(db, CORP, raw_contract(contract_id=2, status="outstanding"))
+    apply_contract(db, CORP, raw_contract(contract_id=3, status="deleted"))
     db.commit()
     [s] = customer_stats(db)
-    assert s.total == 2 and s.completed == 1 and s.isk_earned == 250_000_000.0
+    assert s.total == 3 and s.completed == 1 and s.withdrawn == 1
+    assert s.isk_earned == 250_000_000.0 and s.total_m3 == 320000.0
+
+
+def test_customers_without_deliveries_are_hidden(db):
+    from app.services.contract_sync import apply_contract
+    from app.services.customers import customer_stats
+
+    # A tester who posted a contract and deleted it
+    apply_contract(db, CORP, raw_contract(contract_id=10, issuer_id=91111111, status="deleted"))
+    apply_contract(db, CORP, raw_contract(contract_id=11, status="finished"))
+    db.commit()
+    assert [s.customer.character_id for s in customer_stats(db)] == [90000001]
+    assert len(customer_stats(db, completed_only=False)) == 2
+    # Their detail page still works
+    assert customer_stats(db, 91111111)[0].withdrawn == 1
+
+
+def test_version_compare():
+    from app.services.version import VersionInfo, parse_version
+    assert parse_version("0.10.0") > parse_version("0.9.9")
+    assert VersionInfo(current="0.3.0", latest="0.3.1").update_available
+    assert not VersionInfo(current="0.3.0", latest="0.3.0").update_available
+    assert not VersionInfo(current="0.3.0", latest=None).update_available

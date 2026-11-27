@@ -18,7 +18,7 @@
     <a href="/contracts" class="{{ 'active' if p.startswith('/contracts') }}">Contracts</a>
     <a href="/customers" class="{{ 'active' if p.startswith('/customers') }}">Customers</a>
     <a href="/characters" class="{{ 'active' if p.startswith('/characters') }}">Characters</a>
-    <a href="/system" class="{{ 'active' if p.startswith('/system') }}">System</a>
+    <a href="/system" class="{{ 'active' if p.startswith('/system') }}">System{% if version_info().update_available %} <span class="pill warn small" title="Version {{ version_info().latest }} available">update</span>{% endif %}</a>
     <a href="/logs" class="{{ 'active' if p.startswith('/logs') }}">Logs</a>
   </nav>
   <div class="who">

@@ -2,10 +2,69 @@
 {% block title %}System · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <h1>System</h1>
+
+<div id="updating" class="flash ok" {{ '' if (request.query_params.get('updating') or upd.pending) else 'hidden' }}>
+  <strong>Updating…</strong> <span id="upd-msg">Waiting for the host updater to pick up the request (it checks every minute).</span>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <div class="toolbar" style="margin-bottom:8px">
+    <strong>Version</strong>
+    <span class="mono">{{ ver.current }}</span>
+    {% if ver.update_available %}<span class="pill warn">{{ ver.latest }} available</span>
+    {% elif ver.latest %}<span class="pill ok">up to date</span>
+    {% else %}<span class="pill bad">couldn't check</span>{% endif %}
+    <span class="small muted">checked {{ ver.checked_at | delta(now) }}</span>
+    <span class="spacer"></span>
+    <form class="inline" method="post" action="/system/check-updates"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Check now</button></form>
+    <form class="inline" method="post" action="/system/update-now"
+          onsubmit="return confirm('Pull the newest version and restart the app? It will be offline for about 30 seconds.')">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="{{ 'primary' if ver.update_available }}" {{ '' if upd.installed else 'disabled' }}
+              title="{{ 'Pull the newest image and restart' if upd.installed else 'Set up the host updater first (see below)' }}">Update now</button>
+    </form>
+  </div>
+  {% if ver.error %}<div class="small" style="color:var(--bad)">{{ ver.error }}</div>{% endif %}
+
+  <div class="two-col">
+    <div>
+      <div class="small muted" style="margin-bottom:4px">Recent changes</div>
+      {% for c in ver.commits[:8] %}
+        <div class="small"><a class="mono" href="{{ c.url }}" target="_blank" rel="noopener">{{ c.sha }}</a>
+          {{ c.message }} <span class="muted">· {{ c.date | delta(now) }}</span></div>
+      {% else %}<div class="small muted">No change list available.</div>{% endfor %}
+    </div>
+    <div>
+      <div class="small muted" style="margin-bottom:4px">Host updater</div>
+      {% if upd.installed %}
+        <div class="small"><span class="pill ok">active</span> last check {{ upd.last_seen | delta(now) }}</div>
+      {% else %}
+        <div class="small"><span class="pill bad">not set up</span>
+          {% if upd.last_seen %}last seen {{ upd.last_seen | delta(now) }}{% endif %}</div>
+        <details style="margin-top:6px"><summary class="small">Set up one-click updates</summary>
+          <ol class="small">
+            <li>Install <strong>User Scripts</strong> from Community Apps (if you don't have it).</li>
+            <li>Settings → User Scripts → <strong>Add New Script</strong>, name it <code>conserve-mass-updater</code>.</li>
+            <li>Edit the script and replace its contents with:<br>
+              <code>bash /mnt/user/appdata/conserve-mass-src/update-watcher.sh</code></li>
+            <li>Set its schedule to <strong>Custom</strong> → <code>* * * * *</code> and click Apply.</li>
+          </ol>
+          <div class="small muted">Run <code>update.sh</code> once first so <code>update-watcher.sh</code> is downloaded.</div>
+        </details>
+      {% endif %}
+      {% if upd.last_result %}
+        <div class="small" style="margin-top:6px">Last update:
+          <span class="pill {{ 'ok' if upd.last_result == 'ok' else ('warn' if upd.last_result == 'running' else 'bad') }}">{{ upd.last_result }}</span>
+          {{ upd.last_finished or upd.last_started or '' }}{% if upd.last_version %} → {{ upd.last_version }}{% endif %}</div>
+        {% if upd.log_tail %}<details><summary class="small">Output</summary><pre class="small mono" style="white-space:pre-wrap">{{ upd.log_tail }}</pre></details>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+
 <div class="two-col">
   <div class="card">
     <dl class="kv">
-      <dt>Version</dt><dd>{{ APP_VERSION }}</dd>
       <dt>Base URL</dt><dd class="mono">{{ settings.base_url }}</dd>
       <dt>SSO callback</dt><dd class="mono">{{ settings.sso_callback_url }}</dd>
       <dt>Config dir</dt><dd class="mono">{{ settings.config_dir }}</dd>
@@ -50,4 +109,35 @@
   {% else %}<tr><td colspan="5" class="muted">None yet.</td></tr>{% endfor %}
   </tbody>
 </table>
+<script>
+(() => {
+  const banner = document.getElementById('updating');
+  if (banner.hidden) return;
+  const msg = document.getElementById('upd-msg');
+  const startVersion = {{ ver.current | tojson }};
+  const requestedAt = Date.now() - 5000;
+  const deadline = Date.now() + 6 * 60 * 1000;
+  let sawPending = false;
+  async function tick() {
+    if (Date.now() > deadline) {
+      msg.textContent = 'This is taking longer than expected. Check the Host updater output below or the Logs tab.';
+      return;
+    }
+    try {
+      const r = await fetch('/system/update-status', {cache: 'no-store'});
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      if (d.version !== startVersion) { location.href = '/system'; return; }
+      if (d.pending) { sawPending = true; }
+      else if (d.result === 'running') { msg.textContent = 'Pulling the new image and restarting…'; }
+      else if (d.finished && Date.parse(d.finished) > requestedAt) { location.href = '/system'; return; }
+    } catch (e) {
+      msg.textContent = 'Restarting… the page will reload when the app is back.';
+    }
+    setTimeout(tick, 3000);
+  }
+  history.replaceState(null, '', '/system');
+  tick();
+})();
+</script>
 {% endblock %}

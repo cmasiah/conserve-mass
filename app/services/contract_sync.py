@@ -12,6 +12,7 @@ from app.db import session_scope, utcnow
 from app.esi import client as esi
 from app.esi import resolver
 from app.models import Contract, ContractEvent, Corporation, Customer, Location, SyncState
+from app.services.customers import FINISHED
 from app.services.notifier import enqueue
 from app.utils import fmt_delta, fmt_isk, fmt_m3
 
@@ -134,9 +135,10 @@ def _summary(c: Contract) -> str:
     if c.deadline:
         lines.append(f"**Deliver by:** {fmt_delta(c.deadline)}")
     if c.customer:
-        n = len(c.customer.contracts)
-        if n > 1:
-            lines.append(f"🔁 Repeat customer — {n} contracts total")
+        delivered = sum(1 for k in c.customer.contracts if k.status in FINISHED)
+        if delivered:
+            lines.append(f"🔁 Returning customer — {delivered} delivered contract"
+                         f"{'s' if delivered != 1 else ''}")
     if c.title:
         lines.append(f"**Note:** {c.title}")
     return "\n".join(lines)

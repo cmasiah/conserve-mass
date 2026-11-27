@@ -3,7 +3,7 @@ import asyncio
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ from app.models.couriers import OPEN_STATUSES, WORK_STATUSES
 from app.security import require_csrf, require_user
 from app.services.backup import run_backup
 from app.services.customers import FINISHED, customer_stats
+from app.services import updater, version
 from app.services.notifier import enqueue
 from app.web.templating import flash, render
 
@@ -95,8 +96,10 @@ def contract_update(request: Request, contract_id: int, work_status: str = Form(
 
 
 @router.get("/customers")
-def customers(request: Request, sort: str = "total", db: Session = Depends(get_db)):
-    return render(request, "customers.html", rows=customer_stats(db, order=sort), sort=sort)
+def customers(request: Request, sort: str = "completed", all: int = 0,
+              db: Session = Depends(get_db)):
+    rows = customer_stats(db, order=sort, completed_only=not all)
+    return render(request, "customers.html", rows=rows, sort=sort, show_all=bool(all))
 
 
 @router.get("/customers/{character_id}")
@@ -163,7 +166,7 @@ def delete_character(request: Request, character_id: int, csrf: str = Form(""),
 
 
 @router.get("/system")
-def system(request: Request, db: Session = Depends(get_db)):
+async def system(request: Request, db: Session = Depends(get_db)):
     s = get_settings()
     notes = db.scalars(select(Notification).order_by(Notification.created_at.desc())
                        .limit(25)).all()
@@ -171,7 +174,42 @@ def system(request: Request, db: Session = Depends(get_db)):
     backups = sorted(s.backup_dir.glob("conserve-mass-*.db"), reverse=True)[:5] \
         if s.backup_dir.exists() else []
     return render(request, "system.html", notes=notes, syncs=syncs, backups=backups,
-                  settings=s, bot_ready=bot.is_ready_for_dm(), bot_configured=bot.configured)
+                  settings=s, bot_ready=bot.is_ready_for_dm(), bot_configured=bot.configured,
+                  ver=await version.check(), upd=updater.status(), now=utcnow())
+
+
+@router.post("/system/check-updates")
+async def check_updates(request: Request, csrf: str = Form("")):
+    require_csrf(request, csrf)
+    info = await version.check(force=True)
+    if info.error:
+        flash(request, info.error, "error")
+    elif info.update_available:
+        flash(request, f"Version {info.latest} is available.")
+    else:
+        flash(request, f"You're up to date ({info.current}).")
+    return _redirect("/system")
+
+
+@router.get("/system/update-status")
+def update_status():
+    st = updater.status()
+    from app.config import APP_VERSION
+    return JSONResponse({"version": APP_VERSION, "pending": st.pending,
+                         "result": st.last_result, "finished": st.last_finished})
+
+
+@router.post("/system/update-now")
+def update_now(request: Request, csrf: str = Form("")):
+    require_csrf(request, csrf)
+    st = updater.status()
+    if not st.installed:
+        flash(request, "The host updater isn't running yet, so the app can't update itself. "
+                       "See 'Set up one-click updates' below.", "error")
+        return _redirect("/system")
+    if not st.pending:
+        updater.request_update(request.session["user"]["name"])
+    return _redirect("/system?updating=1")
 
 
 @router.post("/system/test-discord")
