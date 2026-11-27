@@ -20,6 +20,9 @@ def test_fresh_database_upgrades_to_head(tmp_path):
     db = sqlite3.connect(tmp_path / "conserve-mass.db")
     cols = {r[1] for r in db.execute("PRAGMA table_info(customers)")}
     assert {"muted", "blocked", "flag_reason", "flagged_at"} <= cols
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"character_skills", "industry_jobs", "blueprints", "type_info",
+            "skill_queues"} <= tables
 
 
 def test_0002_survives_linked_contracts_and_failed_0_4_0_leftovers(tmp_path):
@@ -52,4 +55,4 @@ def test_0002_survives_linked_contracts_and_failed_0_4_0_leftovers(tmp_path):
     assert db.execute("SELECT name FROM sqlite_master WHERE name LIKE '_alembic_tmp%'"
                       ).fetchall() == []
     assert db.execute("SELECT version_num FROM alembic_version").fetchone()[0] \
-        == "0002_abuse_controls"
+        == "0005_skill_queue"
