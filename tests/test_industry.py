@@ -83,7 +83,7 @@ def test_slot_breakdown_lists_skills_and_remote_range():
     assert r["capacity"] == 10
     assert [x["name"] for x in r["rows"]] == ["Reactions", "Mass Reactions",
                                              "Advanced Mass Reactions"]
-    assert r["remote"]["name"] == "Remote Reactions" and r["remote"]["level"] == 2
+    assert r["remote"]["name"] == "Remote Reactions" and r["remote"]["reach"] == "within 10 jumps"
     m = slot_breakdown(lv, "manufacturing")
     assert m["capacity"] == 7                                   # this character's max, not 11
     assert m["remote"]["reach"] == "current system only"        # no Supply Chain Management

@@ -61,9 +61,9 @@ REMOTE_SKILLS = {
     "science": "Scientific Networking",
     "reactions": "Remote Reactions",
 }
-# Verified range: +5 jumps per level, 25 at V. (Remote Reactions' range isn't stated
-# here because we couldn't confirm CCP's exact numbers.)
-REMOTE_JUMPS_PER_LEVEL = {"Supply Chain Management": 5, "Scientific Networking": 5}
+# All three: +5 jumps per level, 25 at V; untrained = current system only.
+REMOTE_JUMPS_PER_LEVEL = {"Supply Chain Management": 5, "Scientific Networking": 5,
+                          "Remote Reactions": 5}
 CATEGORY_LABELS = {"manufacturing": "Manufacturing", "science": "Research",
                    "reactions": "Reactions"}
 TRACKED_SKILLS = {s for pair in SLOT_SKILLS.values() for s in pair} | {
