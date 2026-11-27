@@ -5,40 +5,56 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {% block head %}{% endblock %}
   <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css">
-  <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/app.css?v={{ ASSET_V }}">
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg?v={{ ASSET_V }}">
 </head>
 <body class="{{ 'with-nav' if user }}">
 {% if user %}
 {% set p = request.url.path %}
-{% macro item(href, label, active, badge='') -%}
-  <a href="{{ href }}" class="{{ 'active' if active }}">{{ label }}{{ badge | safe }}</a>
+{% set ICONS = {
+  'home': '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/>',
+  'dashboard': '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  'contracts': '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13h7M9 17h7"/>',
+  'customers': '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5"/><circle cx="17.5" cy="9" r="2.5"/><path d="M16 14.6c2.6.1 4.7 1.9 5.4 5.4"/>',
+  'slots': '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  'jobs': '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
+  'blueprints': '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  'characters': '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.5 4.2-7 8-7s7 2.5 8 7"/>',
+  'notifications': '<path d="M6 16V11a6 6 0 0112 0v5l2 2H4z"/><path d="M10 20a2 2 0 004 0"/>',
+  'system': '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+  'logs': '<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>'
+} %}
+{% macro item(href, label, icon, active, badge='') -%}
+  <a href="{{ href }}" class="nav-item{{ ' active' if active }}">
+    <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS[icon] | safe }}</svg>
+    <span class="nav-label">{{ label }}</span>{{ badge | safe }}
+  </a>
 {%- endmacro %}
 <aside class="side">
   <a href="/" class="brand-block">
-    <img src="/static/icon.svg" alt="" width="36" height="36">
+    <img src="/static/icon.svg?v={{ ASSET_V }}" alt="" width="40" height="40">
     <span class="brand">Conserve Mass<small>ops</small></span>
   </a>
 
   <nav>
-    {{ item('/', 'Home', p == '/') }}
+    {{ item('/', 'Home', 'home', p == '/') }}
 
     <div class="nav-group">Hauling Services</div>
-    {{ item('/hauling', 'Dashboard', p == '/hauling') }}
-    {{ item('/contracts', 'Contracts', p.startswith('/contracts')) }}
-    {{ item('/customers', 'Customers', p.startswith('/customers')) }}
+    {{ item('/hauling', 'Dashboard', 'dashboard', p == '/hauling') }}
+    {{ item('/contracts', 'Contracts', 'contracts', p.startswith('/contracts')) }}
+    {{ item('/customers', 'Customers', 'customers', p.startswith('/customers')) }}
 
     <div class="nav-group">Industry</div>
-    {{ item('/industry/slots', 'Slots & Skills', p.startswith('/industry/slots')) }}
-    {{ item('/industry/jobs', 'Jobs', p.startswith('/industry/jobs')) }}
-    {{ item('/industry/blueprints', 'Blueprints', p.startswith('/industry/blueprints')) }}
+    {{ item('/industry/slots', 'Slots & Skills', 'slots', p.startswith('/industry/slots')) }}
+    {{ item('/industry/jobs', 'Jobs', 'jobs', p.startswith('/industry/jobs')) }}
+    {{ item('/industry/blueprints', 'Blueprints', 'blueprints', p.startswith('/industry/blueprints')) }}
 
     <div class="nav-group">Admin</div>
-    {{ item('/characters', 'Characters', p.startswith('/characters')) }}
-    {{ item('/settings/notifications', 'Notifications', p.startswith('/settings')) }}
-    {{ item('/system', 'System', p.startswith('/system'),
-            ' <span class="pill warn small">update</span>' if version_info().update_available else '') }}
-    {{ item('/logs', 'Logs', p.startswith('/logs')) }}
+    {{ item('/characters', 'Characters', 'characters', p.startswith('/characters')) }}
+    {{ item('/settings/notifications', 'Notifications', 'notifications', p.startswith('/settings')) }}
+    {{ item('/system', 'System', 'system', p.startswith('/system'),
+            ' <span class="nav-badge">update</span>' if version_info().update_available else '') }}
+    {{ item('/logs', 'Logs', 'logs', p.startswith('/logs')) }}
   </nav>
 
   <div class="who">
