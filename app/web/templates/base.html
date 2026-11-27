@@ -67,12 +67,13 @@
       {{ item('/industry/blueprints', 'Blueprints', 'blueprints', p.startswith('/industry/blueprints')) }}
     {% endcall %}
 
-    {% set upd = version_info().update_available %}
+    {# named nav_update so it can't shadow page variables such as `upd` on the System page #}
+    {% set nav_update = version_info().update_available %}
     {% call section('admin', 'Admin', 'admin', p.startswith('/characters') or p.startswith('/settings') or p.startswith('/system') or p.startswith('/logs')) %}
       {{ item('/characters', 'Characters', 'characters', p.startswith('/characters')) }}
       {{ item('/settings/notifications', 'Notifications', 'notifications', p.startswith('/settings')) }}
       {{ item('/system', 'System', 'system', p.startswith('/system'),
-              ' <span class="nav-badge">update</span>' if upd else '') }}
+              ' <span class="nav-badge">update</span>' if nav_update else '') }}
       {{ item('/logs', 'Logs', 'logs', p.startswith('/logs')) }}
     {% endcall %}
   </nav>
