@@ -5,11 +5,21 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-IMAGE=ghcr.io/cmasiah/conserve-mass:latest
 CONTAINER=conserve-mass
 
+# Channel from the local .env: CMASS_IMAGE_TAG=latest (stable, main) or beta (beta branch).
+TAG=$(grep -E '^[[:space:]]*CMASS_IMAGE_TAG=' .env 2>/dev/null | tail -1 | cut -d= -f2- \
+      | tr -d "\"' \r" || true)
+TAG=${TAG:-latest}
+case "$TAG" in
+    beta) BRANCH=beta ;;
+    *)    BRANCH=main ;;
+esac
+IMAGE=ghcr.io/cmasiah/conserve-mass:$TAG
+echo "==> Channel: $TAG (scripts from the $BRANCH branch)"
+
 # Keep this folder's compose file / scripts in sync with GitHub (no git needed).
-RAW=https://raw.githubusercontent.com/cmasiah/conserve-mass/main
+RAW=https://raw.githubusercontent.com/cmasiah/conserve-mass/$BRANCH
 for pair in docker-compose.yml:docker-compose.yml update.sh:update.sh \
             unraid/update-watcher.sh:update-watcher.sh \
             deploy.env.example:deploy.env.example \
@@ -24,7 +34,7 @@ done
 
 old_id=$(docker inspect --format '{{.Image}}' "$CONTAINER" 2>/dev/null || true)
 
-echo "==> Pulling latest image"
+echo "==> Pulling $IMAGE"
 docker compose pull
 new_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
 
@@ -49,7 +59,7 @@ done
 if [ "$healthy" = 1 ]; then
     docker image prune -f >/dev/null
     echo "==> Running version:"
-    docker exec "$CONTAINER" python -c "from app.config import APP_VERSION; print(APP_VERSION)"
+    docker exec "$CONTAINER" sh -c 'python -c "from app.config import APP_VERSION; print(APP_VERSION)"; echo "channel=$APP_CHANNEL commit=$APP_GIT_SHA"'
     echo "==> Done. Logs: Logs tab in the app, or docker logs -f $CONTAINER"
     exit 0
 fi
