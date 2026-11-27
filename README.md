@@ -20,7 +20,7 @@ With that, `/mnt/user/appdata` bypasses the FUSE layer, which SQLite needs to be
 1. Go to https://developers.eveonline.com/applications and create an application.
 2. Set **Callback URL** to `https://<your-npm-host>/auth/callback`. It must match `BASE_URL` + `/auth/callback` exactly.
 3. Select these scopes: `esi-contracts.read_corporation_contracts.v1` and `esi-universe.read_structures.v1`.
-   Also select the industry ones now so you don't have to edit the app later: `esi-industry.read_character_jobs.v1`, `esi-industry.read_corporation_jobs.v1`, `esi-skills.read_skills.v1`, `esi-skills.read_skillqueue.v1`, `esi-assets.read_assets.v1`, `esi-assets.read_corporation_assets.v1`, `esi-characters.read_blueprints.v1`, `esi-corporations.read_blueprints.v1`.
+   Also select the industry ones now so you don't have to edit the app later: `esi-industry.read_character_jobs.v1`, `esi-industry.read_corporation_jobs.v1`, `esi-skills.read_skills.v1`, `esi-skills.read_skillqueue.v1`, `esi-assets.read_assets.v1`, `esi-assets.read_corporation_assets.v1`, `esi-characters.read_blueprints.v1`, `esi-corporations.read_blueprints.v1`, `esi-corporations.read_divisions.v1`.
 4. Copy the Client ID and Secret.
 
 > The app never needs to be reachable from the internet. SSO redirects your *browser* to the callback, so a LAN-only NPM hostname works.
@@ -57,7 +57,7 @@ On Unraid you only need a few files in `/mnt/user/appdata/conserve-mass-src`. Th
 
 | Local file | Holds | Template |
 |---|---|---|
-| `.env` (in this folder, not the app's `.env` in appdata) | `CMASS_PORT`, `TZ`, `CMASS_APPDATA` | `deploy.env.example` |
+| `.env` (in this folder, not the app's `.env` in appdata) | `CMASS_PORT`, `TZ`, `CMASS_APPDATA`, `CMASS_IMAGE_TAG` (release channel) | `deploy.env.example` |
 | `docker-compose.override.yml` | your reverse-proxy Docker network | `docker-compose.override.example.yml` |
 
 ```bash
@@ -114,14 +114,61 @@ Discord slash commands (owner only, work in DMs): `/contracts` and `/sync`.
 - **Mute / Block** on each customer's page. *Muted*: tracked, no pings. *Blocked*: no pings, hidden from the dashboard, no ESI lookups for their contracts. ESI can't reject contracts, so reject junk in-game.
 - **ESI frugality:** the contract list is one call no matter how many contracts exist. Names are batched (one call per 1000 IDs); unknown locations are capped at `MAX_LOCATION_LOOKUPS_PER_SYNC` (25) per sync; IDs that can't be resolved are remembered for 24 h; the app pauses when a rate-limit bucket drops under 10%.
 
+## Home
+The landing page pulls together what needs a look right now, from data the app already has (it makes no extra ESI calls):
+- **Needs attention:** auto-muted issuers, ESI logins to re-link, sync errors, Discord problems, available updates.
+- **Hauling:** open and in-transit contracts, collateral at risk, ISK earned per week (last 8 weeks), next deadlines, top customers this month.
+- **Industry:** free slots, jobs ready and finishing in the next 24 hours, characters with free slots (idle ones first), skill queues that are empty, paused or about to run out.
+
+The previous dashboard is now **Hauling Services → Dashboard** (`/hauling`).
+
+## Industry
+The left menu's **Industry** section covers:
+
+- **Slots & Skills.** Each character's manufacturing, science and reaction slots, how many are in use right now, and their Capital Ship Construction tier.
+  - Slots = 1 base + basic skill level + advanced skill level, so both skills at V gives **11**.
+  - Reactions also need the *Reactions* skill.
+  - Capital Ship Construction tiers: I components · III most capitals · IV jump freighters & supercarriers · V titans.
+- **Jobs.** Active and ready jobs, personal and corp, with progress and time remaining.
+- **Blueprints.** Searchable library of personal blueprints and corp hangar blueprints, grouped by hangar division name. Shows original/copy, ME, TE and runs.
+
+### Scopes and roles
+Enable these scopes on your EVE developer application, then use **Characters → Link with industry scopes** for each character:
+
+| Scope | Used for | Corp role needed |
+|---|---|---|
+| `esi-skills.read_skills.v1` | slot counts, capital tier | none |
+| `esi-skills.read_skillqueue.v1` | skill queue status on Home | none |
+| `esi-industry.read_character_jobs.v1` | personal jobs, slots in use | none |
+| `esi-industry.read_corporation_jobs.v1` | corp jobs | **Factory Manager** |
+| `esi-characters.read_blueprints.v1` | personal blueprints | none |
+| `esi-corporations.read_blueprints.v1` | corp hangar blueprints | **Director** |
+| `esi-corporations.read_divisions.v1` | hangar division names | **Director** |
+| `esi-assets.read_assets.v1`, `esi-assets.read_corporation_assets.v1` | (reserved for stockpiles) | Director for corp |
+
+Polling (in minutes, ESI's cache timers apply on top): skills `INDUSTRY_SKILLS_POLL_MINUTES` (60), jobs `INDUSTRY_JOBS_POLL_MINUTES` (5), blueprints `INDUSTRY_BLUEPRINTS_POLL_MINUTES` (60).
+
 ### Logs tab
-**Logs** in the top menu shows a live view of the app's logs: level filter, text search, expandable tracebacks and an error/warning count.
+**Logs** in the left menu (Admin) shows a live view of the app's logs: level filter, text search, expandable tracebacks and an error/warning count.
 It holds the last 5,000 lines in memory. Full history is written to `/config/logs/conserve-mass.log` (rotated, 5 × 5 MB) and can be downloaded from the page.
 
 ## 5. Backups & updates
 - A nightly backup runs at 04:17 to `/config/backups/` and is kept for `BACKUP_KEEP_DAYS`. You can also trigger one from the System page. CA Appdata Backup will pick these up too.
 - To update: `bash /mnt/user/appdata/conserve-mass-src/update.sh`. It pulls the newest image and restarts. Database migrations run automatically on start.
-- To roll back: set `image: ghcr.io/cmasiah/conserve-mass:<version>` in `docker-compose.yml`, then run `docker compose up -d`.
+- To roll back: set `CMASS_IMAGE_TAG=<version>` (e.g. `0.4.3`) in your local `.env`, then run `docker compose up -d`.
+
+### Release channels: stable and beta
+| Channel | `CMASS_IMAGE_TAG` | Built from | Gets |
+|---|---|---|---|
+| Stable | `latest` (default) | `main` branch | Tested releases |
+| Beta | `beta` | `beta` branch | New features first, for live testing |
+
+Switch by setting `CMASS_IMAGE_TAG` in your local `.env` (next to `docker-compose.yml`) and running `update.sh`. The app knows which channel it was built for: on beta, the System tab shows a **beta channel** badge, and every new commit on `beta` counts as an update, not just a version bump.
+
+How changes flow:
+1. New work goes to a `release-*` branch and a pull request into `beta`. GitHub runs the tests on the pull request; nothing is published.
+2. Merging that pull request builds the `:beta` image. Beta installs offer the update.
+3. Once it's been tested live, a pull request from `beta` into `main` ("Create a merge commit") publishes it as a stable release (`:latest` and `:<version>`).
 
 ### One-click updates from the app
 The **System** tab shows the running version, the newest one on GitHub, recent changes, and an **Update now** button. An "update" badge appears in the menu when a new version is out, and you get a Discord DM once per new version.
@@ -144,16 +191,12 @@ mkdir -p config && CONFIG_DIR=./config alembic upgrade head
 CONFIG_DIR=./config BASE_URL=http://localhost:8000 uvicorn app.main:app --reload
 ```
 
-## 7. Roadmap: industry module (v0.2+)
-Each feature plugs into the existing `characters`, `esi_tokens` and scheduler. Each is one new Alembic migration plus one sync service.
+## 7. Roadmap
+Done: industry job tracker, slot availability, skill queue status, blueprint library, watched-job DMs.
 
-| Feature | ESI source | New tables |
+| Next | ESI source | New tables |
 |---|---|---|
-| Industry job monitor (manufacturing, reactions, research, copying, invention) with "job finished" DMs | `/characters/{id}/industry/jobs`, `/corporations/{id}/industry/jobs` | `industry_jobs` |
-| Slot availability per character (used vs max manufacturing, reaction and science slots) | `/characters/{id}/skills`: Mass Production / Adv. Mass Production, Mass Reactions / Adv. Mass Reactions, Laboratory Operation / Adv. Laboratory Operation | `character_skills` |
-| Skill training status | `/characters/{id}/skillqueue` | `skill_queue` |
-| Stockpile tracking with minimum-level targets and low-stock DMs | `/characters/{id}/assets`, `/corporations/{id}/assets` | `asset_snapshots`, `stockpile_targets` |
-| Blueprint library | `/characters/{id}/blueprints`, `/corporations/{id}/blueprints` | `blueprints` |
-| Item names, groups, materials | CCP static data export (SDE), imported into SQLite | `sde_types`, `sde_groups`, `sde_blueprint_materials` |
+| Stockpile tracking with minimum-level targets, low-stock DMs and shortfalls on Home | `/characters/{id}/assets`, `/corporations/{id}/assets` | `asset_snapshots`, `stockpile_targets` |
+| Item names, groups, materials offline | CCP static data export (SDE), imported into SQLite | `sde_types`, `sde_groups`, `sde_blueprint_materials` |
 
 SQLite still fits this workload: one writer, and asset snapshots in the tens of thousands of rows.
