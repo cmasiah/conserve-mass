@@ -7,61 +7,67 @@
   <strong>Updating…</strong> <span id="upd-msg">Waiting for the host updater to pick up the request (it checks every minute).</span>
 </div>
 
-<div class="card" style="margin-bottom:16px">
-  <div class="toolbar" style="margin-bottom:8px">
-    <strong>Version</strong>
-    <span class="mono">{{ ver.current_label }}</span>
-    {% if ver.channel == "beta" %}<span class="pill info small" title="Running the :beta image, built from the beta branch">beta channel</span>{% endif %}
-    {% if ver.update_available %}<span class="pill warn">{{ ver.latest_label }} available</span>
-    {% elif ver.building %}<span class="pill" title="GitHub is still building and testing this version">{{ ver.latest_label }} building…</span>
-    {% elif ver.latest %}<span class="pill ok">up to date</span>
-    {% else %}<span class="pill bad">couldn't check</span>{% endif %}
-    <span class="small muted">checked {{ ver.checked_at | delta(now) }}</span>
+<div class="card ver-card">
+  <div class="ver-main">
+    <div>
+      <div class="label small muted">VERSION</div>
+      <div class="ver-num" title="{{ ver.current_label }}">{{ ver.current }}
+        {% if ver.channel == "beta" %}<span class="pill info small">beta</span>{% endif %}</div>
+    </div>
+    <div class="ver-status">
+      {% if ver.update_available %}
+        <span class="pill warn">{{ 'New beta build' if ver.channel == 'beta' else ver.latest ~ '' }} available</span>
+      {% elif ver.building %}
+        <span class="pill" title="GitHub is still building and testing it">Update building…</span>
+      {% elif ver.latest %}<span class="pill ok">Up to date</span>
+      {% else %}<span class="pill bad">Couldn't check</span>{% endif %}
+      <span class="small muted">checked {{ ver.checked_at | delta(now) }}</span>
+      {% if ver.error %}<div class="small" style="color:var(--bad)">{{ ver.error }}</div>{% endif %}
+    </div>
     <span class="spacer"></span>
+    <a class="small" href="https://github.com/{{ settings.update_repo }}/commits/{{ 'beta' if ver.channel == 'beta' else 'main' }}" target="_blank" rel="noopener">What's changed ↗</a>
     <form class="inline" method="post" action="/system/check-updates"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Check now</button></form>
     <form class="inline" method="post" action="/system/update-now"
           onsubmit="return confirm('Pull the newest version and restart the app? It will be offline for about 30 seconds.')">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="{{ 'primary' if ver.update_available }}" {{ '' if upd.installed else 'disabled' }}
-              title="{{ 'Pull the newest image and restart' if upd.installed else 'Set up the host updater first (see below)' }}">Update now</button>
+              title="{{ 'Pull the newest image and restart' if upd.installed else 'The host updater is not running (see below)' }}">Update now</button>
     </form>
   </div>
-  {% if ver.error %}<div class="small" style="color:var(--bad)">{{ ver.error }}</div>{% endif %}
 
-  <div class="two-col">
-    <div>
-      <div class="small muted" style="margin-bottom:4px">Recent changes</div>
-      {% for c in ver.commits[:8] %}
-        <div class="small"><a class="mono" href="{{ c.url }}" target="_blank" rel="noopener">{{ c.sha }}</a>
-          {{ c.message }} <span class="muted">· {{ c.date | delta(now) }}</span></div>
-      {% else %}<div class="small muted">No change list available.</div>{% endfor %}
-    </div>
-    <div>
-      <div class="small muted" style="margin-bottom:4px">Host updater</div>
-      {% if upd.installed %}
-        <div class="small"><span class="pill ok">active</span> last check {{ upd.last_seen | delta(now) }}</div>
-      {% else %}
-        <div class="small"><span class="pill bad">not set up</span>
-          {% if upd.last_seen %}last seen {{ upd.last_seen | delta(now) }}{% endif %}</div>
-        <details style="margin-top:6px"><summary class="small">Set up one-click updates</summary>
-          <ol class="small">
-            <li>Install <strong>User Scripts</strong> from Community Apps (if you don't have it).</li>
-            <li>Settings → User Scripts → <strong>Add New Script</strong>, name it <code>conserve-mass-updater</code>.</li>
-            <li>Edit the script and replace its contents with:<br>
-              <code>bash /mnt/user/appdata/conserve-mass-src/update-watcher.sh</code></li>
-            <li>Set its schedule to <strong>Custom</strong> → <code>* * * * *</code> and click Apply.</li>
-          </ol>
-          <div class="small muted">Run <code>update.sh</code> once first so <code>update-watcher.sh</code> is downloaded.</div>
-        </details>
-      {% endif %}
-      {% if upd.last_result %}
-        <div class="small" style="margin-top:6px">Last update:
-          <span class="pill {{ 'ok' if upd.last_result == 'ok' else ('warn' if upd.last_result == 'running' else 'bad') }}">{{ upd.last_result }}</span>
-          {{ upd.last_finished or upd.last_started or '' }}{% if upd.last_version %} → {{ upd.last_version }}{% endif %}</div>
-        {% if upd.log_tail %}<details><summary class="small">Output</summary><pre class="small mono" style="white-space:pre-wrap">{{ upd.log_tail }}</pre></details>{% endif %}
-      {% endif %}
-    </div>
+  <div class="ver-updater">
+    <span class="small muted">Host updater</span>
+    {% if upd.installed %}
+      <span class="pill ok small">active</span> <span class="small muted">checked in {{ upd.last_seen | delta(now) }}</span>
+    {% elif upd.last_seen %}
+      <span class="pill bad small">not running</span>
+      <span class="small muted">last checked in {{ upd.last_seen | delta(now) }} — the Unraid User Script has stopped running</span>
+    {% else %}
+      <span class="pill bad small">not set up</span>
+    {% endif %}
+    {% if upd.last_result %}
+      <span class="small muted">· last update</span>
+      <span class="pill small {{ 'ok' if upd.last_result == 'ok' else ('warn' if upd.last_result == 'running' else 'bad') }}">{{ upd.last_result }}</span>
+      <span class="small muted">{{ upd.last_finished or upd.last_started or '' }}</span>
+    {% endif %}
   </div>
+  {% if not upd.installed %}
+  <details class="small" style="margin-top:8px"><summary>{{ 'Fix the host updater' if upd.last_seen else 'Set up one-click updates' }}</summary>
+    <ol>
+      {% if upd.last_seen %}
+      <li>Unraid → Settings → <strong>User Scripts</strong>: check <code>conserve-mass-updater</code> still has schedule <strong>Custom</strong> → <code>* * * * *</code>, then click <strong>Apply</strong> at the bottom (the schedule only saves on Apply).</li>
+      <li>Click <strong>Run Script</strong> once. This page should show <em>active</em> within a minute.</li>
+      <li>Still not active? In the Unraid terminal run <code>bash /mnt/user/appdata/conserve-mass-src/update-watcher.sh; ls -l /mnt/user/appdata/conserve-mass/updater-heartbeat</code> and send me the output.</li>
+      {% else %}
+      <li>Install <strong>User Scripts</strong> from Community Apps.</li>
+      <li>Settings → User Scripts → <strong>Add New Script</strong>, name it <code>conserve-mass-updater</code>, contents:
+        <code>bash /mnt/user/appdata/conserve-mass-src/update-watcher.sh</code></li>
+      <li>Schedule <strong>Custom</strong> → <code>* * * * *</code>, then <strong>Apply</strong>.</li>
+      {% endif %}
+    </ol>
+  </details>
+  {% endif %}
+  {% if upd.log_tail %}<details class="small"><summary>Last update output</summary><pre class="small mono" style="white-space:pre-wrap">{{ upd.log_tail }}</pre></details>{% endif %}
 </div>
 
 <div class="two-col">
@@ -83,11 +89,19 @@
     </dl>
   </div>
   <div class="card">
-    <div class="toolbar">
-      <form class="inline" method="post" action="/system/test-discord"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Send test DM</button></form>
-      <form class="inline" method="post" action="/system/sync-now"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Sync contracts now</button></form>
-      <form class="inline" method="post" action="/system/backup-now"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Back up DB now</button></form>
-      <form class="inline" method="post" action="/system/retry-failed"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Retry failed alerts</button></form>
+    <div class="action-grid">
+      <form method="post" action="/system/test-discord"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="act act-discord"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
+          <span><strong>Send Test Message</strong><small>Check Discord delivery</small></span></button></form>
+      <form method="post" action="/system/sync-now"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="act act-sync"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 00-14.3-4.9L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0014.3 4.9L20 16"/><path d="M20 20v-4h-4"/></svg>
+          <span><strong>Sync Contracts</strong><small>Ask ESI for changes now</small></span></button></form>
+      <form method="post" action="/system/backup-now"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="act act-backup"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg>
+          <span><strong>Back Up Database</strong><small>Snapshot to /config/backups</small></span></button></form>
+      <form method="post" action="/system/retry-failed"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="act act-retry"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg>
+          <span><strong>Retry Failed Alerts</strong><small>Re-queue undelivered DMs</small></span></button></form>
     </div>
     <strong class="small">Recent backups</strong>
     {% for b in backups %}<div class="mono small">{{ b.name }}</div>{% else %}<div class="small muted">None yet (nightly 04:17).</div>{% endfor %}
@@ -107,15 +121,25 @@
 
 <h2>Recent notifications</h2>
 <table>
-  <thead><tr><th>Created</th><th>Kind</th><th>Title</th><th>Status</th><th>Error</th></tr></thead>
-  <tbody>
-  {% for n in notes %}
-    <tr><td class="small">{{ n.created_at | dt }}</td><td class="mono small">{{ n.kind }}</td><td>{{ n.title }}</td>
-      <td><span class="pill {{ 'ok' if n.status == 'sent' else ('bad' if n.status == 'failed' else 'warn') }}">{{ n.status }}</span></td>
-      <td class="small">{{ n.error or '' }}</td></tr>
-  {% else %}<tr><td colspan="5" class="muted">None yet.</td></tr>{% endfor %}
+  <thead><tr><th>Sent</th><th>Kind</th><th>Message</th><th>Status</th><th>Error</th></tr></thead>
+  {% for g in notes %}
+  {% set multi = g["items"] | length > 1 %}
+  <tbody class="grp">
+    <tr class="grp-row {{ 'multi' if multi }}">
+      <td class="small">{{ (g.sent_at or g.created_at) | dt }}</td>
+      <td class="mono small">{{ g.kind }}</td>
+      <td>{% if multi %}<span class="grp-toggle"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></span>{% endif %}{{ g.title }}
+        {% if multi %}<span class="pill small">digest of {{ g["items"] | length }}</span>{% endif %}</td>
+      <td><span class="pill {{ 'ok' if g.status == 'sent' else ('bad' if g.status == 'failed' else 'warn') }}">{{ g.status }}</span></td>
+      <td class="small">{{ g.error or '' }}</td>
+    </tr>
+    {% if multi %}{% for n in g["items"] %}
+    <tr class="grp-item"><td class="small muted">{{ n.created_at | dt }}</td><td></td><td class="small">{{ n.title }}</td><td></td><td></td></tr>
+    {% endfor %}{% endif %}
   </tbody>
+  {% else %}<tbody><tr><td colspan="5" class="muted">None yet.</td></tr></tbody>{% endfor %}
 </table>
+<script src="/static/tables.js?v={{ ASSET_V }}"></script>
 <script>
 (() => {
   const banner = document.getElementById('updating');
