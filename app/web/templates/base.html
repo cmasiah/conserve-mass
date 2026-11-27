@@ -62,7 +62,7 @@
     {% endcall %}
 
     {% call section('industry', 'Industry', 'industry', p.startswith('/industry')) %}
-      {{ item('/industry/slots', 'Slots & Skills', 'slots', p.startswith('/industry/slots')) }}
+      {{ item('/industry/slots', 'Slots', 'slots', p.startswith('/industry/slots')) }}
       {{ item('/industry/jobs', 'Jobs', 'jobs', p.startswith('/industry/jobs')) }}
       {{ item('/industry/blueprints', 'Blueprints', 'blueprints', p.startswith('/industry/blueprints')) }}
     {% endcall %}
