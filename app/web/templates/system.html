@@ -12,6 +12,7 @@
     <strong>Version</strong>
     <span class="mono">{{ ver.current }}</span>
     {% if ver.update_available %}<span class="pill warn">{{ ver.latest }} available</span>
+    {% elif ver.building %}<span class="pill" title="GitHub is still building and testing this version">{{ ver.latest }} building…</span>
     {% elif ver.latest %}<span class="pill ok">up to date</span>
     {% else %}<span class="pill bad">couldn't check</span>{% endif %}
     <span class="small muted">checked {{ ver.checked_at | delta(now) }}</span>
