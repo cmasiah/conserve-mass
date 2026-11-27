@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block head %}<meta http-equiv="refresh" content="120">{% endblock %}
+{% block title %}Home · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Home</h1>
+  <span class="spacer"></span>
+  <span class="small muted">{{ now | dt }} UTC</span>
+</div>
+
+{# Needs attention: only shown when something does #}
+{% if attention %}
+<div class="card attention">
+  <div class="label small muted">NEEDS ATTENTION</div>
+  <ul>
+    {% for a in attention %}
+    <li><span class="pill {{ a.level }} small">{{ a.level }}</span> <a href="{{ a.href }}">{{ a.text }}</a></li>
+    {% endfor %}
+  </ul>
+</div>
+{% else %}
+<div class="card attention ok"><span class="pill ok small">ok</span> Nothing needs attention.</div>
+{% endif %}
+
+<div class="home-cols">
+  <section class="card home-section">
+    <div class="home-head"><h2>Hauling Services</h2><a class="small" href="/hauling">Dashboard →</a></div>
+    <div class="grid">
+      <a class="card stat link" href="/contracts?status=outstanding"><div class="label">Awaiting acceptance</div>
+        <div class="value">{{ hauling.outstanding }}</div>
+        {% if hauling.expiring_24h %}<div class="small warn-text">{{ hauling.expiring_24h }} expiring within 24h</div>{% endif %}</a>
+      <a class="card stat link" href="/contracts?status=in_progress"><div class="label">In transit</div>
+        <div class="value">{{ hauling.in_transit }}</div></a>
+      <div class="card stat"><div class="label">Collateral at risk</div>
+        <div class="value">{{ hauling.collateral_at_risk | isk }}</div></div>
+      <div class="card stat"><div class="label">Delivered (30d)</div>
+        <div class="value">{{ hauling.delivered_30d }}</div>
+        <div class="small muted">{{ hauling.reward_30d | isk }} earned</div></div>
+    </div>
+
+    <h3>ISK earned per week <span class="small muted">(last 8 weeks)</span></h3>
+    <div class="weekbars" role="img" aria-label="Courier reward delivered per week">
+      {% for w in isk_weeks %}
+      <div class="wb" title="Week of {{ w.start.strftime('%b %d') }}: {{ w.isk | isk }} from {{ w.count }} contract(s)">
+        <span class="wb-val small">{{ w.isk | isk if w.isk else '' }}</span>
+        <span class="wb-track"><span class="wb-bar" style="height: {{ [w.pct, 2] | max }}%"></span></span>
+        <span class="wb-lbl small muted">{{ w.start.strftime('%b %d') }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <h3>Next deadlines</h3>
+    {% if deadlines %}
+    <table class="compact">
+      {% for d in deadlines %}
+      <tr>
+        <td><a href="/contracts/{{ d.c.contract_id }}">{{ d.c.customer.name if d.c.customer and d.c.customer.name else d.c.issuer_id }}</a></td>
+        <td class="small muted">{{ 'deliver by' if d.kind == 'deliver' else 'accept by' }}</td>
+        <td class="num"><span class="{{ 'pill ' ~ d.level ~ ' small' if d.level }}">{{ d.at | delta(now) }}</span></td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted small">No open contracts.</p>{% endif %}
+
+    <h3>Top customers this month</h3>
+    {% if top_customers %}
+    <table class="compact">
+      {% for t in top_customers %}
+      <tr><td><a href="/customers/{{ t.id }}">{{ t.name }}</a></td>
+          <td class="num small muted">{{ t.count }} delivered</td><td class="num">{{ t.isk | isk }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted small">No deliveries yet this month.</p>{% endif %}
+  </section>
+
+  <section class="card home-section">
+    <div class="home-head"><h2>Industry</h2><a class="small" href="/industry/jobs">Jobs →</a></div>
+    {% if not industry.characters %}
+      <p class="muted">No skills synced yet. Link characters with industry scopes on
+        <a href="/characters">Characters</a>.</p>
+    {% else %}
+    <div class="grid">
+      {% for cat, label in [("manufacturing", "Manufacturing"), ("science", "Science"), ("reactions", "Reactions")] %}
+      <a class="card stat link" href="/industry/slots"><div class="label">{{ label }} slots free</div>
+        <div class="value">{{ industry.free[cat] }}<span class="small muted"> / {{ industry.total[cat] }}</span></div></a>
+      {% endfor %}
+      <a class="card stat link" href="/industry/jobs"><div class="label">Jobs ready</div>
+        <div class="value">{{ industry.ready_jobs }}</div>
+        <div class="small muted">{{ industry.active_jobs }} running{% if industry.next_end %}, next {{ industry.next_end | delta(now) }}{% endif %}</div></a>
+    </div>
+
+    <h3>Jobs finishing in the next 24h</h3>
+    {% if jobs_24h %}
+    <table class="compact">
+      {% for j in jobs_24h %}
+      <tr>
+        <td>{{ j.what }}{% if j.runs > 1 %} <span class="small muted">×{{ j.runs }}</span>{% endif %}
+          <div class="small muted">{{ j.activity }} · {{ j.who }}</div></td>
+        <td style="width:30%"><div class="meter"><span style="width: {{ j.pct }}%"></span></div></td>
+        <td class="num">{{ j.end | delta(now) }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted small">Nothing finishes in the next 24 hours.</p>{% endif %}
+
+    <h3>Characters with free slots</h3>
+    {% if idle %}
+    <table class="compact">
+      <tr class="small muted"><td></td><td class="num">Mfg</td><td class="num">Sci</td><td class="num">React</td></tr>
+      {% for r in idle %}
+      <tr><td>{{ r.character.name }}{% if r.idle %} <span class="pill warn small">idle</span>{% endif %}</td>
+        {% for c in ["manufacturing", "science", "reactions"] %}
+        <td class="num {{ 'muted' if not r.free[c] }}">{{ r.free[c] }}</td>
+        {% endfor %}</tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted small">Every slot is busy.</p>{% endif %}
+
+    <h3>Skill queues</h3>
+    {% if queues %}
+    <table class="compact">
+      {% for r in queues %}
+      <tr><td>{{ r.character.name }}
+            {% if r.skill %}<div class="small muted">{{ r.skill }}{% if r.q.current_level %} {{ r.q.current_level }}{% endif %}</div>{% endif %}</td>
+          <td><span class="pill {{ r.level }} small">{{ r.state }}</span></td>
+          <td class="num small">{% if r.q.queue_end %}{{ r.q.queue_end | delta(now) }}{% elif r.q.length %}{{ r.q.length }} queued{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted small">No skill queues synced yet (needs the skill queue scope).</p>{% endif %}
+    {% endif %}
+  </section>
+
+</div>
+{% endblock %}

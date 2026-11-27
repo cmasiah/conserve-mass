@@ -8,28 +8,48 @@
   <link rel="stylesheet" href="/static/app.css">
   <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
 </head>
-<body>
+<body class="{{ 'with-nav' if user }}">
 {% if user %}
-<header class="top">
-  <div class="brand">Conserve Mass <small>ops</small></div>
+{% set p = request.url.path %}
+{% macro item(href, label, active, badge='') -%}
+  <a href="{{ href }}" class="{{ 'active' if active }}">{{ label }}{{ badge | safe }}</a>
+{%- endmacro %}
+<aside class="side">
+  <a href="/" class="brand-block">
+    <img src="/static/icon.svg" alt="" width="36" height="36">
+    <span class="brand">Conserve Mass<small>ops</small></span>
+  </a>
+
   <nav>
-    {% set p = request.url.path %}
-    <a href="/" class="{{ 'active' if p == '/' }}">Dashboard</a>
-    <a href="/contracts" class="{{ 'active' if p.startswith('/contracts') }}">Contracts</a>
-    <a href="/customers" class="{{ 'active' if p.startswith('/customers') }}">Customers</a>
-    <a href="/characters" class="{{ 'active' if p.startswith('/characters') }}">Characters</a>
-    <a href="/system" class="{{ 'active' if p.startswith('/system') }}">System{% if version_info().update_available %} <span class="pill warn small" title="Version {{ version_info().latest }} available">update</span>{% endif %}</a>
-    <a href="/logs" class="{{ 'active' if p.startswith('/logs') }}">Logs</a>
+    {{ item('/', 'Home', p == '/') }}
+
+    <div class="nav-group">Hauling Services</div>
+    {{ item('/hauling', 'Dashboard', p == '/hauling') }}
+    {{ item('/contracts', 'Contracts', p.startswith('/contracts')) }}
+    {{ item('/customers', 'Customers', p.startswith('/customers')) }}
+
+    <div class="nav-group">Industry</div>
+    {{ item('/industry/slots', 'Slots & Skills', p.startswith('/industry/slots')) }}
+    {{ item('/industry/jobs', 'Jobs', p.startswith('/industry/jobs')) }}
+    {{ item('/industry/blueprints', 'Blueprints', p.startswith('/industry/blueprints')) }}
+
+    <div class="nav-group">Admin</div>
+    {{ item('/characters', 'Characters', p.startswith('/characters')) }}
+    {{ item('/settings/notifications', 'Notifications', p.startswith('/settings')) }}
+    {{ item('/system', 'System', p.startswith('/system'),
+            ' <span class="pill warn small">update</span>' if version_info().update_available else '') }}
+    {{ item('/logs', 'Logs', p.startswith('/logs')) }}
   </nav>
+
   <div class="who">
     <img src="https://images.evetech.net/characters/{{ user.character_id }}/portrait?size=64" alt="">
-    {{ user.name }}
+    <span class="who-name">{{ user.name }}</span>
     <form class="inline" method="post" action="/logout">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="small">Log out</button>
+      <button class="small" title="Log out">⎋</button>
     </form>
   </div>
-</header>
+</aside>
 {% endif %}
 <main>
   {% if flash %}<div class="flash {{ flash.level }}">{{ flash.msg }}</div>{% endif %}

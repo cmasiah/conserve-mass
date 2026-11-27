@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Industry Jobs · {{ APP_NAME }}{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="120">{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Industry Jobs</h1>
+  {% if ready %}<span class="pill ok">{{ ready }} ready to deliver</span>{% endif %}
+  <span class="spacer"></span>
+  <form class="inline" method="post" action="/industry/sync-now">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/industry/jobs">
+    <button>Sync now</button></form>
+</div>
+<div class="toolbar">
+  <div class="tabs">
+    <a href="?who={{ who }}" class="{{ 'active' if not cat }}">All</a>
+    {% for c in cats %}<a href="?cat={{ c }}&who={{ who }}" class="{{ 'active' if cat == c }}">{{ c | capitalize }}</a>{% endfor %}
+  </div>
+  <span class="spacer"></span>
+  <form method="get">
+    <input type="hidden" name="cat" value="{{ cat }}">
+    <select name="who" onchange="this.form.submit()">
+      <option value="0">All installers</option>
+      {% for iid, nm in installers %}<option value="{{ iid }}" {{ 'selected' if who == iid }}>{{ nm }}</option>{% endfor %}
+    </select>
+  </form>
+</div>
+{% if rows %}
+<table>
+  <thead><tr><th>Item</th><th>Activity</th><th class="num">Runs</th><th>Installer</th><th>Owner</th><th>Progress</th><th>Ends</th></tr></thead>
+  <tbody>
+  {% for v in rows %}
+    <tr>
+      <td><img src="https://images.evetech.net/types/{{ v.j.product_type_id or v.j.blueprint_type_id }}/icon?size=32" width="24" height="24" style="vertical-align:middle" alt=""> {{ v.what }}</td>
+      <td>{{ v.activity }}</td>
+      <td class="num">{{ v.j.runs }}</td>
+      <td>{{ v.who }}</td>
+      <td class="small">{{ v.owner }}</td>
+      <td style="min-width:140px"><div class="meter {{ 'done' if v.done }}"><span style="width: {{ v.pct | round(0) }}%"></span></div>
+        <span class="small muted">{{ v.pct | round(0) | int }}%</span></td>
+      <td class="small">{% if v.done %}<span class="pill ok">ready</span>{% else %}{{ v.j.end_date | delta(now) }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card empty">No active industry jobs. Personal jobs need <code>esi-industry.read_character_jobs.v1</code>;
+  corp jobs need <code>esi-industry.read_corporation_jobs.v1</code> and the Factory Manager role.</div>
+{% endif %}
+{% endblock %}
