@@ -1,11 +1,13 @@
-# Conserve Mass Ops — Unraid deployment
-# Image is built by GitHub Actions and published to GHCR on every push to main.
+# Conserve Mass Ops — Docker Compose deployment (generic; no server-specific values).
 #
-# First run / update (from this folder on Unraid):
-#   docker compose pull && docker compose up -d
-# Or simply:  bash update.sh
+# Your own settings live in two LOCAL files next to this one, which update.sh never
+# touches and which are never committed:
+#   .env                        CMASS_PORT, TZ, CMASS_APPDATA   (see deploy.env.example)
+#   docker-compose.override.yml join your reverse-proxy network (see *.override.example.yml)
+# Docker Compose reads both automatically.
 #
-# Pin a version instead of latest to roll back, e.g. ghcr.io/cmasiah/conserve-mass:0.2.0
+# First run / update (from this folder):  bash update.sh
+# Roll back: set image to a version tag, e.g. ghcr.io/cmasiah/conserve-mass:0.4.1
 services:
   conserve-mass:
     image: ghcr.io/cmasiah/conserve-mass:latest
@@ -14,21 +16,15 @@ services:
     container_name: conserve-mass
     restart: unless-stopped
     environment:
-      - PUID=99
-      - PGID=100
-      - UMASK=022
-      - TZ=America/Chicago
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
+      - UMASK=${UMASK:-022}
+      - TZ=${TZ:-UTC}
     env_file:
-      - /mnt/user/appdata/conserve-mass/.env
+      - ${CMASS_APPDATA:-/mnt/user/appdata/conserve-mass}/.env
     volumes:
-      # appdata share must be cache-only with "Exclusive shares" enabled
-      # (or use /mnt/cache/appdata/conserve-mass) — SQLite + FUSE don't mix.
-      - /mnt/user/appdata/conserve-mass:/config
+      # On Unraid keep appdata cache-only with "Exclusive shares" enabled
+      # (or point CMASS_APPDATA at /mnt/cache/...) — SQLite + FUSE don't mix.
+      - ${CMASS_APPDATA:-/mnt/user/appdata/conserve-mass}:/config
     ports:
-      - "8484:8000"
-    networks:
-      - connectfour
-
-networks:
-  connectfour:
-    external: true
+      - "${CMASS_PORT:-8000}:8000"

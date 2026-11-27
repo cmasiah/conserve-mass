@@ -1,11 +1,12 @@
 <?xml version="1.0"?>
 <!-- Unraid Docker template. Copy to /boot/config/plugins/dockerMan/templates-user/my-conserve-mass.xml
-     (image is published to GHCR by GitHub Actions). -->
+     (image is published to GHCR by GitHub Actions).
+     Set Network to your reverse proxy's custom bridge if you use one. -->
 <Container version="2">
   <Name>conserve-mass</Name>
   <Repository>ghcr.io/cmasiah/conserve-mass:latest</Repository>
   <Registry>https://github.com/cmasiah/conserve-mass/pkgs/container/conserve-mass</Registry>
-  <Network>connectfour</Network>
+  <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
@@ -13,13 +14,13 @@
   <Project/>
   <Overview>Conserve Mass Ops: EVE Online corp courier contract tracker with Discord DM alerts.</Overview>
   <Category>Tools:</Category>
-  <WebUI>http://[IP]:[PORT:8484]/</WebUI>
+  <WebUI>http://[IP]:[PORT:8000]/</WebUI>
   <Icon/>
   <ExtraParams>--restart unless-stopped --env-file /mnt/user/appdata/conserve-mass/.env</ExtraParams>
-  <Config Name="WebUI Port" Target="8000" Default="8484" Mode="tcp" Type="Port" Display="always" Required="true">8484</Config>
+  <Config Name="WebUI Port" Target="8000" Default="8000" Mode="tcp" Type="Port" Display="always" Required="true">8000</Config>
   <Config Name="AppData" Target="/config" Default="/mnt/user/appdata/conserve-mass" Mode="rw" Type="Path" Display="always" Required="true">/mnt/user/appdata/conserve-mass</Config>
   <Config Name="PUID" Target="PUID" Default="99" Type="Variable" Display="advanced" Required="true">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Type="Variable" Display="advanced" Required="true">100</Config>
   <Config Name="UMASK" Target="UMASK" Default="022" Type="Variable" Display="advanced" Required="false">022</Config>
-  <Config Name="TZ" Target="TZ" Default="America/Chicago" Type="Variable" Display="advanced" Required="false">America/Chicago</Config>
+  <Config Name="TZ" Target="TZ" Default="UTC" Type="Variable" Display="advanced" Required="false">UTC</Config>
 </Container>

@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PUID=99 \
     PGID=100 \
     UMASK=022 \
-    TZ=America/Chicago \
+    TZ=UTC \
     CONFIG_DIR=/config \
     PYTHONPATH=/app
 

@@ -11,6 +11,7 @@ backups/
 logs/
 *.log
 uploads/
+docker-compose.override.yml
 *.zip
 
 # --- python / tooling ---

@@ -1,0 +1,12 @@
+# Copy to "docker-compose.override.yml" (local, never committed) to put the app on
+# your reverse proxy's Docker network, so the proxy can reach it as conserve-mass:8000.
+# Docker Compose merges this file automatically.
+services:
+  conserve-mass:
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: your-proxy-network   # e.g. the custom bridge Nginx Proxy Manager uses

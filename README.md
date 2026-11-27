@@ -5,7 +5,7 @@ It tracks the corp's courier contracts, keeps a record of repeat customers, and 
 
 - Single container: FastAPI with server-rendered pages, APScheduler and a discord.py bot.
 - SQLite in `/config` (WAL mode, nightly online backups).
-- Unraid-native: `PUID=99`/`PGID=100`, all state in `/mnt/user/appdata/conserve-mass`, host port **8484**.
+- Unraid-native: `PUID=99`/`PGID=100`, all state in `/mnt/user/appdata/conserve-mass`, host port configurable (default **8000**).
 
 ---
 
@@ -53,13 +53,21 @@ nano /mnt/user/appdata/conserve-mass/.env                     # paste values, Ct
 ## 2. Run
 
 The image is built by GitHub Actions and published as `ghcr.io/cmasiah/conserve-mass` (public; it contains code only, no secrets).
-On Unraid you only need two files in `/mnt/user/appdata/conserve-mass-src`: `docker-compose.yml` and `update.sh`.
+On Unraid you only need a few files in `/mnt/user/appdata/conserve-mass-src`. The public `docker-compose.yml` holds only generic defaults; your own values go in two **local** files that are never committed and never overwritten by `update.sh`:
+
+| Local file | Holds | Template |
+|---|---|---|
+| `.env` (in this folder, not the app's `.env` in appdata) | `CMASS_PORT`, `TZ`, `CMASS_APPDATA` | `deploy.env.example` |
+| `docker-compose.override.yml` | your reverse-proxy Docker network | `docker-compose.override.example.yml` |
 
 ```bash
 mkdir -p /mnt/user/appdata/conserve-mass-src && cd /mnt/user/appdata/conserve-mass-src
-curl -fsSLO https://raw.githubusercontent.com/cmasiah/conserve-mass/main/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/cmasiah/conserve-mass/main/update.sh
-bash update.sh          # pulls the image, starts it on the "connectfour" network
+RAW=https://raw.githubusercontent.com/cmasiah/conserve-mass/main
+for f in docker-compose.yml update.sh deploy.env.example docker-compose.override.example.yml; do curl -fsSLO "$RAW/$f"; done
+cp deploy.env.example .env                                         # set your port / timezone
+cp docker-compose.override.example.yml docker-compose.override.yml # set your network name
+nano .env; nano docker-compose.override.yml
+bash update.sh
 ```
 Using the Unraid Docker tab instead? Copy `unraid/conserve-mass.xml` to `/boot/config/plugins/dockerMan/templates-user/`.
 
@@ -70,8 +78,8 @@ Add a Proxy Host with:
 - Scheme: `http`
 - SSL: your cert, Force SSL on
 
-NPM must be on the same `connectfour` network. Port 8484 on the host is only for direct LAN access.
-If `BASE_URL` is `https://…`, the session cookie is HTTPS-only, so log in through the NPM hostname, not `http://ip:8484`.
+NPM must be on the network named in your `docker-compose.override.yml`. The host port (`CMASS_PORT`) is only for direct LAN access.
+If `BASE_URL` is `https://…`, the session cookie is HTTPS-only, so log in through the NPM hostname, not `http://<server-ip>:<port>`.
 
 ## 3. First login
 1. Open `BASE_URL` and click **Log in with EVE Online** as your CEO.

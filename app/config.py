@@ -5,14 +5,14 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_NAME = "Conserve Mass Ops"
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.2"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
     config_dir: Path = Path("/config")
-    base_url: str = "http://localhost:8484"
+    base_url: str = "http://localhost:8000"
 
     esi_client_id: str = ""
     esi_client_secret: str = ""
