@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -13,7 +13,7 @@ from app.esi import client as esi
 from app.esi import resolver
 from app.models import Contract, ContractEvent, Corporation, Customer, Location, SyncState
 from app.services.customers import FINISHED
-from app.services.notifier import enqueue
+from app.services.notifier import cancel_for_subject, enqueue
 from app.utils import fmt_delta, fmt_isk, fmt_m3
 
 log = logging.getLogger(__name__)
@@ -122,6 +122,14 @@ def _route(c: Contract) -> str:
     return f"{a}\n→ {b}"
 
 
+def _line(c: Contract) -> str:
+    """Compact one-liner used in digest DMs."""
+    a = (c.start_location.system_name if c.start_location else None) or "?"
+    b = (c.end_location.system_name if c.end_location else None) or "?"
+    who = c.customer.name if c.customer and c.customer.name else str(c.issuer_id)
+    return f"{a} → {b} · {fmt_m3(c.volume_m3)} · {fmt_isk(c.reward_isk)} ISK · {who}"
+
+
 def _summary(c: Contract) -> str:
     who = c.customer.name if c.customer and c.customer.name else str(c.issuer_id)
     lines = [
@@ -144,18 +152,56 @@ def _summary(c: Contract) -> str:
     return "\n".join(lines)
 
 
+def _alert(db: Session, c: Contract, kind: str, title: str) -> None:
+    enqueue(db, ref=f"contract:{c.contract_id}", kind=kind, title=title, body=_summary(c),
+            url=f"{get_settings().base_url}/contracts/{c.contract_id}",
+            line=_line(c), subject_id=c.issuer_id)
+
+
 def _queue_alerts(db: Session, r: ApplyResult) -> None:
     c = r.contract
-    url = f"{get_settings().base_url}/contracts/{c.contract_id}"
-    ref = f"contract:{c.contract_id}"
+    if c.customer and c.customer.silenced:
+        return  # muted or blocked issuer: tracked, never pinged
     if r.is_new and c.status == "outstanding" and (
             c.date_expired is None or c.date_expired > utcnow()):
-        enqueue(db, ref=ref, kind="new_contract", title="🚚 New courier contract",
-                body=_summary(c), url=url)
+        _alert(db, c, "new_contract", "🚚 New courier contract")
     for fld, _old, new in r.changes:
         if fld == "status" and new in ALERT_STATUS_CHANGES:
             title, kind = ALERT_STATUS_CHANGES[new]
-            enqueue(db, ref=ref, kind=f"status_{kind}", title=title, body=_summary(c), url=url)
+            _alert(db, c, f"status_{kind}", title)
+
+
+def detect_spam(db: Session, issuer_ids: set[int]) -> list[Customer]:
+    """Auto-mute issuers who posted more than spam_contracts_per_hour contracts
+    (by EVE issue time) in the last hour. Sends one warning DM per issuer per hour."""
+    s = get_settings()
+    since = utcnow() - timedelta(hours=1)
+    flagged = []
+    for issuer_id in issuer_ids:
+        cust = db.get(Customer, issuer_id)
+        if cust is None or cust.silenced:
+            continue
+        recent = db.scalar(select(func.count()).select_from(Contract).where(
+            Contract.issuer_id == issuer_id, Contract.date_issued >= since))
+        if recent <= s.spam_contracts_per_hour:
+            continue
+        who = cust.name or str(issuer_id)
+        cust.muted = True
+        cust.flag_reason = f"Auto-muted: {recent} contracts within an hour"
+        cust.flagged_at = utcnow()
+        dropped = cancel_for_subject(db, issuer_id)
+        log.warning("Auto-muted %s (%s): %d contracts in the last hour", who, issuer_id, recent)
+        enqueue(db, ref=f"spam:{issuer_id}:{utcnow():%Y%m%d%H}", kind="spam_detected",
+                title="⚠️ Possible contract spam — issuer auto-muted",
+                body=(f"**{who}** posted **{recent}** courier contracts in the last hour "
+                      f"(limit {s.spam_contracts_per_hour}).\n"
+                      f"They're muted: contracts are still tracked, but you won't be pinged "
+                      f"about them. {dropped} pending alert(s) were dropped.\n\n"
+                      f"Review on their customer page to unmute or block. "
+                      f"Reject the contracts in-game if they're junk."),
+                url=f"{s.base_url}/customers/{issuer_id}")
+        flagged.append(cust)
+    return flagged
 
 
 def queue_deadline_alerts(db: Session) -> None:
@@ -166,17 +212,16 @@ def queue_deadline_alerts(db: Session) -> None:
     open_contracts = db.scalars(
         select(Contract).where(Contract.status.in_(["outstanding", "in_progress"]))).all()
     for c in open_contracts:
-        url = f"{s.base_url}/contracts/{c.contract_id}"
-        ref = f"contract:{c.contract_id}"
+        if c.customer and c.customer.silenced:
+            continue
         if c.status == "outstanding" and c.date_expired and now < c.date_expired <= horizon:
-            enqueue(db, ref=ref, kind="expiring", title="⏳ Unaccepted contract expiring soon",
-                    body=_summary(c), url=url)
+            _alert(db, c, "expiring", "⏳ Unaccepted contract expiring soon")
         if c.status == "in_progress" and c.deadline and now < c.deadline <= horizon:
-            enqueue(db, ref=ref, kind="delivery_due", title="⏰ Delivery deadline approaching",
-                    body=_summary(c), url=url)
+            _alert(db, c, "delivery_due", "⏰ Delivery deadline approaching")
 
 
-async def _enrich(db: Session, results: list[ApplyResult], token: str) -> None:
+async def _enrich_names(db: Session, results: list[ApplyResult]) -> None:
+    """Customer + corp names: one batched ESI call per 1000 unknown IDs."""
     ids: set[int] = set()
     for r in results:
         ids |= {r.contract.issuer_id, r.contract.issuer_corp_id or 0,
@@ -190,8 +235,18 @@ async def _enrich(db: Session, results: list[ApplyResult], token: str) -> None:
             cust.corporation_id = r.contract.issuer_corp_id or cust.corporation_id
             if cust.corporation_id in names:
                 cust.corporation_name = names[cust.corporation_id].name
+    db.flush()
+
+
+async def _enrich_locations(db: Session, results: list[ApplyResult], token: str) -> None:
+    """Station/structure names: capped per sync, skipped for muted/blocked issuers."""
+    budget = resolver.LookupBudget(get_settings().max_location_lookups_per_sync)
+    for r in results:
+        cust = r.contract.customer
+        if cust and cust.silenced:
+            continue
         for loc_id in (r.contract.start_location_id, r.contract.end_location_id):
-            await resolver.resolve_location(db, loc_id, token)
+            await resolver.resolve_location(db, loc_id, token, budget)
     db.flush()
 
 
@@ -217,7 +272,11 @@ async def sync_corporation_contracts() -> None:
             if not res.not_modified:
                 results = [r for raw in res.data if (r := apply_contract(db, corp_id, raw))]
                 db.flush()
-                await _enrich(db, results, token)
+                await _enrich_names(db, results)
+                # Spam check before location lookups and alerts, so a flood never
+                # fans out into ESI calls or Discord pings.
+                detect_spam(db, {r.contract.issuer_id for r in results if r.is_new})
+                await _enrich_locations(db, results, token)
                 for r in results:
                     db.refresh(r.contract)
                     _queue_alerts(db, r)
