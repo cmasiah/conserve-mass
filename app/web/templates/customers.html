@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Customers · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<h1>Customers</h1>
+<div class="toolbar tabs">
+  Sort:
+  <a href="?sort=total" class="{{ 'active' if sort == 'total' }}">Most contracts</a>
+  <a href="?sort=isk" class="{{ 'active' if sort == 'isk' }}">Most ISK</a>
+  <a href="?sort=recent" class="{{ 'active' if sort == 'recent' }}">Most recent</a>
+</div>
+{% if rows %}
+<table>
+  <thead><tr><th>Customer</th><th>Corporation</th><th class="num">Contracts</th><th class="num">Delivered</th>
+    <th class="num">Failed</th><th class="num">ISK earned</th><th class="num">Volume</th><th>Last contract</th><th>Tag</th></tr></thead>
+  <tbody>
+  {% for s in rows %}
+    <tr>
+      <td><a href="/customers/{{ s.customer.character_id }}">{{ s.customer.name or s.customer.character_id }}</a>
+        {% if s.total > 1 %}<span class="pill ok small">repeat</span>{% endif %}</td>
+      <td class="muted">{{ s.customer.corporation_name or '' }}</td>
+      <td class="num">{{ s.total }}</td><td class="num">{{ s.completed }}</td>
+      <td class="num">{{ s.failed }}</td><td class="num">{{ s.isk_earned | isk }}</td>
+      <td class="num">{{ s.total_m3 | m3 }}</td>
+      <td class="small">{{ s.last_contract_at | dt }}</td>
+      <td>{% if s.customer.tag %}<span class="pill">{{ s.customer.tag }}</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<div class="card empty">No customers yet.</div>{% endif %}
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import contract_table %}
+{% block head %}<meta http-equiv="refresh" content="120">{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">
+    {% if corp %}[{{ corp.ticker or '?' }}] {{ corp.name or corp.corporation_id }}{% else %}Dashboard{% endif %}
+  </h1>
+  <span class="spacer"></span>
+  {% if sync %}
+    <span class="small muted">Last sync {{ sync.last_success_at | delta(now) }}
+      {% if sync.last_error %}<span class="pill bad" title="{{ sync.last_error }}">error</span>{% endif %}</span>
+  {% endif %}
+  <form class="inline" method="post" action="/system/sync-now">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><button>Sync now</button>
+  </form>
+</div>
+
+{% if not corp %}
+  <div class="flash error">No tracked corporation yet. Log in with a Conserve Mass character that granted
+    <code>esi-contracts.read_corporation_contracts.v1</code>. See <a href="/characters">Characters</a>.</div>
+{% endif %}
+{% if not bot_configured %}
+  <div class="flash error">Discord isn't configured: alerts are queuing ({{ pending }} pending).
+    Set <code>DISCORD_BOT_TOKEN</code> and <code>DISCORD_OWNER_USER_ID</code>.</div>
+{% elif not bot_ready %}
+  <div class="flash error">Discord bot is not connected yet. {{ pending }} alert(s) pending.</div>
+{% endif %}
+
+<div class="grid">
+  <div class="card stat"><div class="label">Awaiting acceptance</div><div class="value">{{ outstanding|length }}</div></div>
+  <div class="card stat"><div class="label">In transit</div><div class="value">{{ in_progress|length }}</div></div>
+  <div class="card stat"><div class="label">Collateral at risk</div>
+    <div class="value">{{ in_progress | sum(attribute='collateral_isk') | isk }}</div></div>
+  <div class="card stat"><div class="label">Delivered (30d)</div><div class="value">{{ done_30d[0] }}</div></div>
+  <div class="card stat"><div class="label">Revenue (30d)</div><div class="value">{{ done_30d[1] | isk }}</div></div>
+  <div class="card stat"><div class="label">Moved (30d)</div><div class="value">{{ done_30d[2] | m3 }}</div></div>
+</div>
+
+<h2>Awaiting acceptance</h2>
+{{ contract_table(outstanding, now) }}
+
+<h2>In transit</h2>
+{{ contract_table(in_progress, now) }}
+{% endblock %}

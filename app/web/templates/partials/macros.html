@@ -1,0 +1,58 @@
+{% macro status_pill(c, now) -%}
+  {%- if c.status == 'outstanding' and c.date_expired and c.date_expired < now -%}
+    <span class="pill expired">expired</span>
+  {%- else -%}
+    <span class="pill {{ c.status }}">{{ c.status | replace('_', ' ') }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro sec(loc) -%}
+  {%- if loc and loc.security is not none -%}
+    {%- set s = loc.security -%}
+    <span class="{{ 'sec-hi' if s >= 0.45 else ('sec-lo' if s > 0.0 else 'sec-null') }}">{{ '%.1f' % s }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro place(loc) -%}
+  {%- if loc -%}
+    {{ sec(loc) }} <strong>{{ loc.system_name or '?' }}</strong>
+    <div class="small muted">{{ loc.display }}</div>
+  {%- else -%}<span class="muted">?</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro contract_table(rows, now, show_customer=True) -%}
+{% if rows %}
+<table>
+  <thead><tr>
+    <th>Status</th>{% if show_customer %}<th>Customer</th>{% endif %}
+    <th>From</th><th>To</th><th class="num">Volume</th><th class="num">Reward</th>
+    <th class="num">Collateral</th><th>Timing</th><th>Work</th>
+  </tr></thead>
+  <tbody>
+  {% for c in rows %}
+    <tr>
+      <td><a href="/contracts/{{ c.contract_id }}">{{ status_pill(c, now) }}</a></td>
+      {% if show_customer %}
+      <td><a href="/customers/{{ c.issuer_id }}">{{ c.customer.name if c.customer and c.customer.name else c.issuer_id }}</a>
+        {% if c.customer and c.customer.tag %}<span class="pill small">{{ c.customer.tag }}</span>{% endif %}</td>
+      {% endif %}
+      <td>{{ place(c.start_location) }}</td>
+      <td>{{ place(c.end_location) }}</td>
+      <td class="num">{{ c.volume_m3 | m3 }}</td>
+      <td class="num">{{ c.reward_isk | isk }}</td>
+      <td class="num">{{ c.collateral_isk | isk }}</td>
+      <td class="small">
+        {% if c.status == 'in_progress' and c.deadline %}due {{ c.deadline | delta(now) }}
+        {% elif c.status == 'outstanding' %}expires {{ c.date_expired | delta(now) }}
+        {% elif c.date_completed %}done {{ c.date_completed | delta(now) }}
+        {% else %}issued {{ c.date_issued | delta(now) }}{% endif %}
+      </td>
+      <td><span class="pill small">{{ c.work_status | replace('_', ' ') }}</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card empty">Nothing here.</div>
+{% endif %}
+{%- endmacro %}

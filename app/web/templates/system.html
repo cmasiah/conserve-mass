@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}System · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<h1>System</h1>
+<div class="two-col">
+  <div class="card">
+    <dl class="kv">
+      <dt>Version</dt><dd>{{ APP_VERSION }}</dd>
+      <dt>Base URL</dt><dd class="mono">{{ settings.base_url }}</dd>
+      <dt>SSO callback</dt><dd class="mono">{{ settings.sso_callback_url }}</dd>
+      <dt>Config dir</dt><dd class="mono">{{ settings.config_dir }}</dd>
+      <dt>Poll interval</dt><dd>{{ settings.contract_poll_seconds }}s</dd>
+      <dt>Discord</dt><dd>
+        {% if not bot_configured %}<span class="pill bad">not configured</span>
+        {% elif bot_ready %}<span class="pill ok">connected</span>
+        {% else %}<span class="pill warn">connecting…</span>{% endif %}</dd>
+    </dl>
+  </div>
+  <div class="card">
+    <div class="toolbar">
+      <form class="inline" method="post" action="/system/test-discord"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Send test DM</button></form>
+      <form class="inline" method="post" action="/system/sync-now"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Sync contracts now</button></form>
+      <form class="inline" method="post" action="/system/backup-now"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Back up DB now</button></form>
+      <form class="inline" method="post" action="/system/retry-failed"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Retry failed alerts</button></form>
+    </div>
+    <strong class="small">Recent backups</strong>
+    {% for b in backups %}<div class="mono small">{{ b.name }}</div>{% else %}<div class="small muted">None yet (nightly 04:17).</div>{% endfor %}
+  </div>
+</div>
+
+<h2>ESI sync</h2>
+<table>
+  <thead><tr><th>Key</th><th>Last success</th><th>Cache expires</th><th>Last error</th></tr></thead>
+  <tbody>
+  {% for s in syncs %}
+    <tr><td class="mono">{{ s.key }}</td><td>{{ s.last_success_at | dt }}</td><td>{{ s.expires_at | dt }}</td>
+      <td class="small">{{ s.last_error or '' }}</td></tr>
+  {% else %}<tr><td colspan="4" class="muted">No syncs yet.</td></tr>{% endfor %}
+  </tbody>
+</table>
+
+<h2>Recent notifications</h2>
+<table>
+  <thead><tr><th>Created</th><th>Kind</th><th>Title</th><th>Status</th><th>Error</th></tr></thead>
+  <tbody>
+  {% for n in notes %}
+    <tr><td class="small">{{ n.created_at | dt }}</td><td class="mono small">{{ n.kind }}</td><td>{{ n.title }}</td>
+      <td><span class="pill {{ 'ok' if n.status == 'sent' else ('bad' if n.status == 'failed' else 'warn') }}">{{ n.status }}</span></td>
+      <td class="small">{{ n.error or '' }}</td></tr>
+  {% else %}<tr><td colspan="5" class="muted">None yet.</td></tr>{% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% block head %}{% endblock %}
+  <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚚</text></svg>">
+</head>
+<body>
+{% if user %}
+<header class="top">
+  <div class="brand">Conserve Mass <small>ops</small></div>
+  <nav>
+    {% set p = request.url.path %}
+    <a href="/" class="{{ 'active' if p == '/' }}">Dashboard</a>
+    <a href="/contracts" class="{{ 'active' if p.startswith('/contracts') }}">Contracts</a>
+    <a href="/customers" class="{{ 'active' if p.startswith('/customers') }}">Customers</a>
+    <a href="/characters" class="{{ 'active' if p.startswith('/characters') }}">Characters</a>
+    <a href="/system" class="{{ 'active' if p.startswith('/system') }}">System</a>
+    <a href="/logs" class="{{ 'active' if p.startswith('/logs') }}">Logs</a>
+  </nav>
+  <div class="who">
+    <img src="https://images.evetech.net/characters/{{ user.character_id }}/portrait?size=64" alt="">
+    {{ user.name }}
+    <form class="inline" method="post" action="/logout">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="small">Log out</button>
+    </form>
+  </div>
+</header>
+{% endif %}
+<main>
+  {% if flash %}<div class="flash {{ flash.level }}">{{ flash.msg }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

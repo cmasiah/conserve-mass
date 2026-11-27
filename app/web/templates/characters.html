@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Characters · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Characters</h1>
+  <span class="spacer"></span>
+  <a class="btn" href="/auth/login?profile=courier">+ Link character</a>
+  <a class="btn" href="/auth/login?profile=industry" title="Grants the scopes the upcoming industry module needs">+ Link with industry scopes</a>
+</div>
+
+<table>
+  <thead><tr><th>Character</th><th>Corp</th><th>Role</th><th>Token</th><th>Scopes</th><th></th></tr></thead>
+  <tbody>
+  {% for ch in chars %}
+    {% set t = ch.token %}
+    <tr>
+      <td><img src="https://images.evetech.net/characters/{{ ch.character_id }}/portrait?size=32" width="24" height="24" style="border-radius:50%;vertical-align:middle" alt="">
+        {{ ch.name }}</td>
+      <td class="small muted">{{ 'Conserve Mass' if corp and ch.corporation_id == corp.corporation_id else ch.corporation_id }}</td>
+      <td>
+        {% if ch.is_admin %}<span class="pill ok">admin</span>{% endif %}
+        {% if corp and corp.sync_character_id == ch.character_id %}<span class="pill in_progress">contract poller</span>{% endif %}
+      </td>
+      <td>
+        {% if t and t.is_valid %}<span class="pill ok">valid</span>
+        {% elif t %}<span class="pill bad" title="{{ t.last_error }}">re-login needed</span>
+        {% else %}<span class="pill bad">none</span>{% endif %}
+      </td>
+      <td class="small">
+        {% if t %}
+          {% set has = t.scope_set %}
+          {% if courier_scopes <= has %}<span class="pill ok">courier</span>{% endif %}
+          {% if industry_scopes <= has %}<span class="pill ok">industry</span>{% endif %}
+          <details><summary class="muted">{{ has|length }} scopes</summary>
+            {% for s in has|sort %}<div class="mono">{{ s }}</div>{% endfor %}</details>
+        {% endif %}
+      </td>
+      <td style="white-space:nowrap">
+        {% if corp and ch.corporation_id == corp.corporation_id and corp.sync_character_id != ch.character_id %}
+          <form class="inline" method="post" action="/characters/{{ ch.character_id }}/sync">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><button class="small">Use as poller</button></form>
+        {% endif %}
+        {% if ch.character_id != user.character_id %}
+          <form class="inline" method="post" action="/characters/{{ ch.character_id }}/delete"
+                onsubmit="return confirm('Remove {{ ch.name }} and its ESI token?')">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><button class="small danger">Remove</button></form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="small muted">To fix an invalid token, link the same character again; its token is replaced.
+  Industry, reactions, science-slot and stockpile tracking will use the "industry" scope set.</p>
+{% endblock %}

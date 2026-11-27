@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="login">
+  <div class="card">
+    <div class="brand" style="font-size:22px">Conserve Mass</div>
+    <p class="muted">Jump freight operations</p>
+    {% if missing %}
+      <div class="flash error" style="text-align:left">
+        Setup incomplete. Add these to <code>/mnt/user/appdata/conserve-mass/.env</code> and restart:
+        <ul>{% for m in missing %}<li><code>{{ m }}</code></li>{% endfor %}</ul>
+      </div>
+    {% else %}
+      <p><a class="btn primary" href="/auth/login?profile=courier">Log in with EVE Online</a></p>
+      <p class="small muted">Requests corp contract read access and structure names.<br>
+      Only authorized characters can sign in.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

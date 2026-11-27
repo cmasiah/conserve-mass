@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import status_pill, place %}
+{% block title %}Contract {{ c.contract_id }} · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Contract <span class="mono">{{ c.contract_id }}</span></h1>
+  {{ status_pill(c, now) }}
+  <span class="spacer"></span>
+  <a href="/contracts" class="btn">← All contracts</a>
+</div>
+
+<div class="two-col">
+  <div class="card">
+    <dl class="kv">
+      <dt>Customer</dt>
+      <dd><a href="/customers/{{ c.issuer_id }}">{{ c.customer.name or c.issuer_id }}</a>
+        {% if c.customer.corporation_name %}<span class="muted">· {{ c.customer.corporation_name }}</span>{% endif %}</dd>
+      <dt>Pickup</dt><dd>{{ place(c.start_location) }}</dd>
+      <dt>Destination</dt><dd>{{ place(c.end_location) }}</dd>
+      <dt>Volume</dt><dd>{{ c.volume_m3 | m3 }}</dd>
+      <dt>Reward</dt><dd>{{ c.reward_isk | isk }} ISK
+        {% if c.volume_m3 %}<span class="muted small">({{ (c.reward_isk / c.volume_m3) | round(0) | int }} ISK/m³)</span>{% endif %}</dd>
+      <dt>Collateral</dt><dd>{{ c.collateral_isk | isk }} ISK</dd>
+      <dt>Days to complete</dt><dd>{{ c.days_to_complete or '—' }}</dd>
+      <dt>Issued</dt><dd>{{ c.date_issued | dt }} <span class="muted small">({{ c.date_issued | delta(now) }})</span></dd>
+      <dt>Expires</dt><dd>{{ c.date_expired | dt }}</dd>
+      <dt>Accepted</dt><dd>{{ c.date_accepted | dt }}</dd>
+      {% if c.deadline %}<dt>Deliver by</dt><dd>{{ c.deadline | dt }} <span class="muted small">({{ c.deadline | delta(now) }})</span></dd>{% endif %}
+      <dt>Completed</dt><dd>{{ c.date_completed | dt }}</dd>
+      {% if c.title %}<dt>Issuer note</dt><dd>{{ c.title }}</dd>{% endif %}
+    </dl>
+  </div>
+
+  <div>
+    <div class="card">
+      <form method="post">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <p><label>Work status<br>
+          <select name="work_status">
+            {% for w in WORK_STATUSES %}<option value="{{ w }}" {{ 'selected' if w == c.work_status }}>{{ w | replace('_',' ') }}</option>{% endfor %}
+          </select></label></p>
+        <p><label>Notes<br><textarea name="notes" placeholder="Cyno alt, route, fuel…">{{ c.notes or '' }}</textarea></label></p>
+        <button class="primary">Save</button>
+      </form>
+    </div>
+    {% if stats %}
+    <div class="card" style="margin-top:12px">
+      <strong>Customer history</strong>
+      <p class="small">{{ stats.total }} contracts · {{ stats.completed }} delivered · {{ stats.failed }} failed ·
+        {{ stats.isk_earned | isk }} ISK earned</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<h2>History</h2>
+<table>
+  <thead><tr><th>When</th><th>Field</th><th>Change</th><th>Source</th></tr></thead>
+  <tbody>
+  {% for e in c.events %}
+    <tr><td class="small">{{ e.observed_at | dt }}</td><td>{{ e.field }}</td>
+      <td>{{ e.old_value or '∅' }} → <strong>{{ e.new_value or '∅' }}</strong></td>
+      <td class="muted">{{ e.source }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

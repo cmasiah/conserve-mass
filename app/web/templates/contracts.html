@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import contract_table %}
+{% block title %}Contracts · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<h1>Courier contracts</h1>
+<div class="toolbar">
+  <div class="tabs">
+    {% for key, label in [('open','Open'),('outstanding','Outstanding'),('in_progress','In transit'),('finished','Finished'),('failed','Failed'),('closed','All closed'),('all','All')] %}
+      <a href="?status={{ key }}{% if q %}&q={{ q | urlencode }}{% endif %}" class="{{ 'active' if status == key }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+  <span class="spacer"></span>
+  <form method="get">
+    <input type="hidden" name="status" value="{{ status }}">
+    <input type="search" name="q" value="{{ q }}" placeholder="Customer name…">
+  </form>
+</div>
+{{ contract_table(rows, now) }}
+<p class="small muted">Showing up to 500 contracts. ESI only returns the last 30 days, so older history exists only here.</p>
+{% endblock %}
