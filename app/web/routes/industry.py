@@ -7,9 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db, utcnow
-from app.models import Blueprint, Character, Corporation, EntityName, EsiToken, IndustryJob
+from app.models import (
+    AssetNode, Blueprint, Character, Corporation, EntityName, EsiToken, IndustryJob, Location,
+    MarketGroup, TypeInfo,
+)
 from app.security import require_csrf, require_user
-from app.services import characters, industry, sync_info
+from app.services import characters, industry, places, sync_info
+from app.services.type_info import market_path
 from app.web.templating import flash, render
 
 router = APIRouter(prefix="/industry", dependencies=[Depends(require_user)])
@@ -167,9 +171,27 @@ def aggregate_blueprints(items: list[dict]) -> list[dict]:
                   key=lambda x: (-x["count"], x["name"], x["b"].is_copy))
 
 
+# Friendlier names for EVE's top-level blueprint market groups.
+SECTION_LABELS = {"Ship Equipment": "Modules", "Ship Modifications": "Rigs",
+                  "Ammunition & Charges": "Ammo & Charges",
+                  "Manufacture & Research": "Components & Materials"}
+UNCATEGORIZED = "Not categorized yet"
+
+
+def blueprint_category(path: list[str]) -> tuple[str, str]:
+    """(section, subsection) from a market path like
+    ['Blueprints & Reactions', 'Ammunition & Charges', 'Mining Crystals', ...]."""
+    if path and path[0].startswith("Blueprints"):
+        path = path[1:]
+    if not path:
+        return UNCATEGORIZED, ""
+    section = SECTION_LABELS.get(path[0], path[0])
+    return section, (path[1] if len(path) > 1 else "")
+
+
 @router.get("/blueprints")
 def blueprints(request: Request, q: str = "", owner: str = "all", kind: str = "all",
-               combine: int = 1, db: Session = Depends(get_db)):
+               combine: int = 1, cat: str = "", sub: str = "", db: Session = Depends(get_db)):
     stmt = select(Blueprint)
     if owner in ("corporation", "character"):
         stmt = stmt.where(Blueprint.owner_type == owner)
@@ -184,33 +206,65 @@ def blueprints(request: Request, q: str = "", owner: str = "all", kind: str = "a
         needle = q.lower()
         rows = [b for b in rows if needle in names.get(b.type_id, "").lower()]
 
+    # Categories (market groups) and places (structures), all from the local cache.
+    infos = {t.type_id: t for t in db.scalars(select(TypeInfo).where(
+        TypeInfo.type_id.in_({b.type_id for b in rows})))}
+    groups_tree = {g.market_group_id: g for g in db.scalars(select(MarketGroup))}
+    nodes: dict[tuple, dict[int, AssetNode]] = {}
+    for n in db.scalars(select(AssetNode)):
+        nodes.setdefault((n.owner_type, n.owner_id), {})[n.item_id] = n
+    locations = {loc.location_id: loc for loc in db.scalars(select(Location))}
     corps = {c.corporation_id: c for c in db.scalars(select(Corporation))}
     divs = {cid: industry.division_names(db, cid) for cid in corps}
-    sections: dict[str, list[dict]] = {"manufacturing": [], "reactions": []}
+    pilots = {c.character_id: c.name for c in db.scalars(select(Character))}
+
+    items, cat_counts, sub_counts = [], Counter(), Counter()
     for b in rows:
         name = names.get(b.type_id, f"Type {b.type_id}")
-        if b.owner_type == "corporation":
-            where = divs.get(b.owner_id, {}).get(b.location_flag) or b.location_flag or "Corp"
-        else:
-            where = f"{names.get(b.owner_id, b.owner_id)} (personal)"
-        sections[blueprint_kind(name)].append({"b": b, "name": name, "where": where})
+        ti = infos.get(b.type_id)
+        section, subsection = blueprint_category(market_path(groups_tree, ti.market_group_id)
+                                                 if ti and ti.market_group_id else [])
+        n = b.quantity if b.quantity > 0 else 1
+        cat_counts[section] += n
+        if cat and section != cat:
+            continue
+        if subsection:
+            sub_counts[subsection] += n
+        if sub and subsection != sub:
+            continue
+        place = places.describe(
+            b.location_id, b.location_flag, nodes.get((b.owner_type, b.owner_id), {}),
+            locations, divs.get(b.owner_id) if b.owner_type == "corporation" else None)
+        who = "" if b.owner_type == "corporation" else \
+            f"{pilots.get(b.owner_id) or names.get(b.owner_id, b.owner_id)} (personal)"
+        detail = " · ".join(x for x in (place.detail, who) if x)
+        where = f"{place.site}\x1f{detail}"
+        items.append({"b": b, "name": name, "where": where, "section": section,
+                      "subsection": subsection or section})
 
+    sections: dict[str, list[dict]] = {"manufacturing": [], "reactions": []}
+    for it in items:
+        sections[blueprint_kind(it["name"])].append(it)
     view = {}
-    for key, items in sections.items():
-        if not items:
+    for key, its in sections.items():
+        if not its:
             continue
         if combine:
-            lines = aggregate_blueprints(items)
+            lines = aggregate_blueprints(its)
         else:
             lines = [{**it, "count": it["b"].quantity if it["b"].quantity > 0 else 1,
-                      "where": Counter({it["where"]: 1})} for it in items]
+                      "where": Counter({it["where"]: 1})} for it in its]
             lines.sort(key=lambda x: (x["name"], x["b"].is_copy))
         view[key] = {"label": "Reaction formulas" if key == "reactions" else "Manufacturing",
                      "lines": lines, "total": sum(x["count"] for x in lines)}
     total = sum(g["total"] for g in view.values())
     lines = sum(len(g["lines"]) for g in view.values())
+    order = sorted(cat_counts, key=lambda c: (c == UNCATEGORIZED, -cat_counts[c], c))
     return render(request, "industry_blueprints.html", groups=view, q=q, owner=owner,
                   kind=kind, combine=combine, total=total, lines=lines, now=utcnow(),
+                  cat=cat, sub=sub, categories=[(c, cat_counts[c]) for c in order],
+                  subcategories=sorted(sub_counts.items(), key=lambda x: (-x[1], x[0])),
+                  all_count=sum(cat_counts.values()),
                   sync_feeds=sync_info.feeds(db, "industry"))
 
 

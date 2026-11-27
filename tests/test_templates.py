@@ -23,7 +23,9 @@ def test_system_page_shows_running_updater():
                   digest_threshold=3, discord_max_messages_per_hour=30,
                   max_location_lookups_per_sync=25, update_repo="o/r")
     html = _render("system.html", ver=ver, upd=upd, settings=settings, notes=[], syncs=[],
-                   backups=[], bot_ready=True, bot_configured=True, now=now)
+                   backups=[], bot_ready=True, bot_configured=True, now=now,
+                   esi_usage=__import__("app.esi.usage", fromlist=["summary"]).summary(),
+                   esi_expected=[])
     assert ">active<" in html
     assert "not set up" not in html
     assert "The host updater is not running" not in html      # button not disabled

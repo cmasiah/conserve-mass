@@ -113,3 +113,56 @@ def pressed_message(db: Session, kind: str) -> str:
     if fresh:
         msg += f" ({', '.join(fresh).capitalize()} pulled fresh.)"
     return msg
+
+
+@dataclass
+class Expected:
+    feed: str
+    who: str
+    count: int
+    per_hour_each: float
+    note: str = ""
+
+    @property
+    def per_hour(self) -> float:
+        return self.count * self.per_hour_each
+
+
+def _per_hour(poll: timedelta, cache: timedelta) -> float:
+    """Most network calls one poller makes per hour: it never asks before ESI's cache
+    expires, so the slower of the two clocks wins."""
+    return 3600 / max(poll.total_seconds(), cache.total_seconds())
+
+
+def expected_per_hour(db: Session) -> list[Expected]:
+    """Upper bound on ESI calls per hour with the current characters and settings.
+    Real numbers are lower: unchanged data comes back as a cheap 304."""
+    from app.models import Character
+    from app.services.characters import CHAR_BPS, CHAR_JOBS, SKILLS
+    s = get_settings()
+    chars = db.scalars(select(Character)).all()
+
+    def n(scope: str, toggle: str) -> int:
+        return sum(1 for c in chars if c.token and c.token.is_valid
+                   and scope in c.token.scope_set and getattr(c, f"track_{toggle}"))
+
+    skills_poll = timedelta(minutes=s.industry_skills_poll_minutes)
+    jobs_poll = timedelta(minutes=s.industry_jobs_poll_minutes)
+    bps_poll = timedelta(minutes=s.industry_blueprints_poll_minutes)
+    rows = [
+        Expected("Corp contracts", "poller", 1,
+                 _per_hour(timedelta(seconds=s.contract_poll_seconds), timedelta(minutes=5)),
+                 "checked every minute, but ESI only refreshes every 5"),
+        Expected("Skills + queue", "per character", n(SKILLS, "skills"),
+                 2 * _per_hour(skills_poll, timedelta(minutes=2))),
+        Expected("Industry jobs", "per character", n(CHAR_JOBS, "industry"),
+                 _per_hour(jobs_poll, timedelta(minutes=5))),
+        Expected("Blueprints", "per character", n(CHAR_BPS, "industry"),
+                 _per_hour(bps_poll, timedelta(hours=1)), "+1 per extra page of 1000"),
+        Expected("Corp jobs + blueprints", "director",
+                 1 if any(c.token and c.token.is_valid and
+                          "esi-industry.read_corporation_jobs.v1" in c.token.scope_set
+                          for c in chars) else 0,
+                 _per_hour(jobs_poll, timedelta(minutes=5)) + _per_hour(bps_poll, timedelta(hours=1))),
+    ]
+    return [r for r in rows if r.count]

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import release_write_lock, utcnow
-from app.esi import sso
+from app.esi import sso, usage
 from app.models import EsiToken, SyncState
 from app.security import decrypt, encrypt
 
@@ -110,6 +110,7 @@ async def _send(method: str, path: str, *, token: str | None = None,
         hdrs["Authorization"] = f"Bearer {token}"
     for attempt in range(4):
         resp = await client().request(method, path, params=params, json=json, headers=hdrs)
+        usage.record(path, resp.status_code, resp.headers)
 
         # Legacy error-limit: back off before CCP bans the IP.
         remain = resp.headers.get("X-ESI-Error-Limit-Remain")

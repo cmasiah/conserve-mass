@@ -10,7 +10,7 @@ ESI budget (all calls honour each endpoint's Expires/ETag via sync_state):
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -21,10 +21,11 @@ from app.config import get_settings
 from app.esi import resolver
 from app.services import prefs
 from app.services.notifier import enqueue
-from app.services.type_info import resolve_types
+from app.services import places
+from app.services.type_info import resolve_market_groups, resolve_types
 from app.models import (
     Blueprint, Character, CharacterSkill, Corporation, EntityName, EsiToken, IndustryJob,
-    Setting, SkillQueue, TypeInfo,
+    AssetNode, Location, MarketGroup, Setting, SkillQueue, SyncState, TypeInfo,
 )
 
 log = logging.getLogger(__name__)
@@ -36,6 +37,10 @@ SCOPE_CORP_JOBS = "esi-industry.read_corporation_jobs.v1"
 SCOPE_CHAR_BPS = "esi-characters.read_blueprints.v1"
 SCOPE_CORP_BPS = "esi-corporations.read_blueprints.v1"
 SCOPE_DIVISIONS = "esi-corporations.read_divisions.v1"
+SCOPE_CHAR_ASSETS = "esi-assets.read_assets.v1"
+SCOPE_CORP_ASSETS = "esi-assets.read_corporation_assets.v1"
+SCOPE_STRUCTURES = "esi-universe.read_structures.v1"
+BLUEPRINT_TYPE_LOOKUPS = 150   # one-time static lookups for categories; the rest next hour
 
 # ---------------------------------------------------------------- slot math (pure)
 
@@ -200,17 +205,63 @@ def _personal_tokens(db: Session, scope: str, toggle: str) -> list[EsiToken]:
     return [t for t in _tokens_with(db, scope) if getattr(t.character, f"track_{toggle}")]
 
 
-async def _corp_token(db: Session, corp_id: int, scope: str) -> str | None:
-    """A token from a character in `corp_id` that has `scope` (poller first)."""
+ROLE_DENIED_RETRY = timedelta(hours=6)
+
+
+def _denied_key(scope: str, character_id: int) -> str:
+    return f"denied:{scope}:{character_id}"
+
+
+def _corp_candidates(db: Session, corp_id: int, scope: str) -> list[EsiToken]:
+    """Tokens from characters in `corp_id` with `scope`, the contract poller first."""
     corp = db.get(Corporation, corp_id)
-    candidates = _tokens_with(db, scope)
-    candidates.sort(key=lambda t: t.character_id != (corp.sync_character_id if corp else None))
-    for t in candidates:
-        if t.character.corporation_id == corp_id:
-            try:
-                return await esi.access_token(db, t.character_id)
-            except esi.NoValidToken:
-                continue
+    poller = corp.sync_character_id if corp else None
+    cands = [t for t in _tokens_with(db, scope) if t.character.corporation_id == corp_id]
+    cands.sort(key=lambda t: t.character_id != poller)
+    return cands
+
+
+async def _corp_get(db: Session, corp_id: int, scope: str, key: str, path: str,
+                    **kw) -> esi.EsiResult | None:
+    """GET a corp endpoint with the first character that's allowed to.
+
+    The scope only lets a character *ask*; the corp role decides the answer. A 403
+    (no Director / Factory Manager role) moves on to the next character and parks that
+    one for ROLE_DENIED_RETRY, so a member without roles doesn't cost an ESI error
+    (5 rate-limit tokens, plus the global error budget) on every run."""
+    now = utcnow()
+    for t in _corp_candidates(db, corp_id, scope):
+        parked = db.get(SyncState, _denied_key(scope, t.character_id))
+        if parked and parked.expires_at and parked.expires_at > now:
+            continue
+        try:
+            token = await esi.access_token(db, t.character_id)
+            return await esi.get_cached_paged(db, key, path, token=token, **kw)
+        except esi.NoValidToken:
+            continue
+        except esi.EsiError as e:
+            if e.status not in (401, 403):
+                raise
+            row = parked or SyncState(key=_denied_key(scope, t.character_id))
+            row.expires_at, row.last_attempt_at = now + ROLE_DENIED_RETRY, now
+            row.last_error = f"{e.status}: {t.character.name} lacks the corp role"
+            db.add(row)
+            db.commit()
+            log.info("%s can't read %s (corp role missing); trying another character",
+                     t.character.name, path)
+    return None
+
+
+async def _corp_token(db: Session, corp_id: int, scope: str) -> str | None:
+    """A usable token for `corp_id` with `scope` (for calls that aren't a cached GET)."""
+    for t in _corp_candidates(db, corp_id, scope):
+        parked = db.get(SyncState, _denied_key(scope, t.character_id))
+        if parked and parked.expires_at and parked.expires_at > utcnow():
+            continue
+        try:
+            return await esi.access_token(db, t.character_id)
+        except esi.NoValidToken:
+            continue
     return None
 
 
@@ -348,18 +399,16 @@ async def sync_jobs() -> None:
             db.commit()
 
         for corp_id in _tracked_corp_ids(db):
-            token = await _corp_token(db, corp_id, SCOPE_CORP_JOBS)
-            if not token:
-                continue
             try:
-                res = await esi.get_cached_paged(
-                    db, f"jobs:corp:{corp_id}", f"/corporations/{corp_id}/industry/jobs",
-                    token=token, params={"include_completed": "false"})
+                res = await _corp_get(db, corp_id, SCOPE_CORP_JOBS, f"jobs:corp:{corp_id}",
+                                      f"/corporations/{corp_id}/industry/jobs",
+                                      params={"include_completed": "false"})
             except esi.EsiError as e:
-                # 403 = the character lacks the Factory_Manager corp role.
                 log.warning("Corp job sync failed for %s: %s", corp_id, e)
                 db.commit()
                 continue
+            if res is None:
+                continue  # nobody linked with the Factory Manager role
             if not res.not_modified:
                 _replace_jobs(db, "corporation", corp_id, res.data)
                 type_ids |= {j.get("product_type_id") or 0 for j in res.data}
@@ -435,17 +484,13 @@ def _replace_blueprints(db: Session, owner_type: str, owner_id: int, rows: list[
 
 
 async def _sync_divisions(db: Session, corp_id: int) -> None:
-    token = await _corp_token(db, corp_id, SCOPE_DIVISIONS)
-    if not token:
-        return
     try:
-        res = await esi.get_cached_paged(db, f"divisions:{corp_id}",
-                                         f"/corporations/{corp_id}/divisions",
-                                         token=token, paged=False)
+        res = await _corp_get(db, corp_id, SCOPE_DIVISIONS, f"divisions:{corp_id}",
+                              f"/corporations/{corp_id}/divisions", paged=False)
     except esi.EsiError as e:
-        log.warning("Division names unavailable for %s (needs Director): %s", corp_id, e)
+        log.warning("Division names unavailable for %s: %s", corp_id, e)
         return
-    if res.not_modified:
+    if res is None or res.not_modified:
         return
     for d in res.data.get("hangar", []):
         key = f"division:{corp_id}:{d['division']}"
@@ -464,9 +509,61 @@ def division_names(db: Session, corp_id: int) -> dict[str, str]:
     return out
 
 
+def _owner_blueprints(db: Session, owner_type: str, owner_id: int) -> list[dict]:
+    return [{"location_id": b.location_id, "location_flag": b.location_flag}
+            for b in db.scalars(select(Blueprint).where(Blueprint.owner_type == owner_type,
+                                                        Blueprint.owner_id == owner_id))]
+
+
+async def _place_character(db: Session, tok: EsiToken, budget) -> None:
+    """Which structure each of a character's blueprints is in (see services/places)."""
+    cid = tok.character_id
+    bps = _owner_blueprints(db, "character", cid)
+    if not bps:
+        return
+    token = await esi.access_token(db, cid)
+    can_assets = tok.character.track_assets and SCOPE_CHAR_ASSETS in tok.scope_set
+
+    async def fetch():
+        return await esi.get_cached_paged(db, f"assets:char:{cid}",
+                                          f"/characters/{cid}/assets", token=token)
+
+    async def names(ids):
+        return await esi.post(f"/characters/{cid}/assets/names", ids, token=token)
+
+    await places.locate(db, "character", cid, bps,
+                        fetch_assets=fetch if can_assets else None,
+                        post_names=names if can_assets else None,
+                        token=token if SCOPE_STRUCTURES in tok.scope_set else None,
+                        budget=budget)
+
+
+async def _place_corporation(db: Session, corp_id: int, budget) -> None:
+    bps = _owner_blueprints(db, "corporation", corp_id)
+    if not bps:
+        return
+    can_assets = bool(_corp_candidates(db, corp_id, SCOPE_CORP_ASSETS))
+
+    async def fetch():
+        return await _corp_get(db, corp_id, SCOPE_CORP_ASSETS, f"assets:corp:{corp_id}",
+                               f"/corporations/{corp_id}/assets")
+
+    async def names(ids):
+        token = await _corp_token(db, corp_id, SCOPE_CORP_ASSETS)
+        if not token:
+            return []
+        return await esi.post(f"/corporations/{corp_id}/assets/names", ids, token=token)
+
+    await places.locate(db, "corporation", corp_id, bps,
+                        fetch_assets=fetch if can_assets else None,
+                        post_names=names if can_assets else None,
+                        token=await _corp_token(db, corp_id, SCOPE_STRUCTURES), budget=budget)
+
+
 async def sync_blueprints() -> None:
     with session_scope() as db:
         type_ids: set[int] = set()
+        budget = resolver.LookupBudget(get_settings().max_location_lookups_per_sync)
         for tok in _personal_tokens(db, SCOPE_CHAR_BPS, "industry"):
             cid = tok.character_id
             try:
@@ -481,26 +578,38 @@ async def sync_blueprints() -> None:
                 _replace_blueprints(db, "character", cid, res.data)
                 type_ids |= {b["type_id"] for b in res.data}
             db.commit()  # per owner: blueprints + ETag together, lock released
+            try:
+                await _place_character(db, tok, budget)
+            except (esi.EsiError, esi.NoValidToken) as e:
+                log.info("Couldn't place %s's blueprints: %s", tok.character.name, e)
+                db.rollback()
 
         for corp_id in _tracked_corp_ids(db):
             await _sync_divisions(db, corp_id)
-            token = await _corp_token(db, corp_id, SCOPE_CORP_BPS)
-            if not token:
-                continue
             try:
-                res = await esi.get_cached_paged(db, f"bps:corp:{corp_id}",
-                                                 f"/corporations/{corp_id}/blueprints",
-                                                 token=token)
+                res = await _corp_get(db, corp_id, SCOPE_CORP_BPS, f"bps:corp:{corp_id}",
+                                      f"/corporations/{corp_id}/blueprints")
             except esi.EsiError as e:
-                # 403 = the character lacks the Director corp role.
                 log.warning("Corp blueprint sync failed for %s: %s", corp_id, e)
                 db.commit()
                 continue
+            if res is None:
+                continue  # nobody linked with the Director role
             if not res.not_modified:
                 _replace_blueprints(db, "corporation", corp_id, res.data)
                 type_ids |= {b["type_id"] for b in res.data}
                 log.info("Corp blueprints synced: %d", len(res.data))
             db.commit()
+            try:
+                await _place_corporation(db, corp_id, budget)
+            except esi.EsiError as e:
+                log.info("Couldn't place corp %s blueprints: %s", corp_id, e)
+                db.rollback()
 
         await resolver.resolve_names(db, type_ids)
+        # Categories (item 7): every blueprint type's market group, fetched once ever.
+        all_types = set(db.scalars(select(Blueprint.type_id).distinct()))
+        infos = await resolve_types(db, all_types, budget=BLUEPRINT_TYPE_LOOKUPS)
+        await resolve_market_groups(db, {t.market_group_id for t in infos.values()
+                                         if t.market_group_id})
         db.commit()
