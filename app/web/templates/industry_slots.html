@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Slots & Skills · {{ APP_NAME }}{% endblock %}
+{% macro slotcell(r, cat) -%}
+  {%- if not r.has_skills -%}<span class="muted small">no skill data</span>
+  {%- else -%}
+    {%- set cap = r.capacity.get(cat, 0) -%}{%- set used = r.used.get(cat, 0) -%}
+    <div class="slotcell">
+      <div class="nums">
+        <strong>{{ cap }}</strong><span class="muted"> / {{ max_slots }}</span>
+        {% if cap >= max_slots %}<span class="pill ok small">max</span>
+        {% elif cap >= 10 %}<span class="pill ok small">10+</span>{% endif %}
+        {% if cat == 'reactions' and cap == 0 %}<span class="pill small" title="Requires the Reactions skill">no Reactions skill</span>{% endif %}
+      </div>
+      {% if cap %}
+      <div class="meter {{ 'full' if used >= cap }}" title="{{ used }} of {{ cap }} in use"><span style="width: {{ (used / cap * 100) | round(0) }}%"></span></div>
+      <div class="small muted">{{ used }} in use · {{ r.free(cat) }} free</div>
+      {% endif %}
+    </div>
+  {%- endif -%}
+{%- endmacro %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Slots &amp; Skills</h1>
+  <span class="spacer"></span>
+  <form class="inline" method="post" action="/industry/sync-now">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/industry/slots">
+    <button>Sync now</button></form>
+</div>
+
+<div class="grid">
+  {% for c in cats %}
+    {% set cap, used = totals[c] %}
+    <div class="card stat"><div class="label">{{ c }} slots</div>
+      <div class="value">{{ cap - used }}<span class="muted" style="font-size:14px"> free of {{ cap }}</span></div></div>
+  {% endfor %}
+</div>
+
+<div class="toolbar" style="margin-top:16px">
+  <div class="tabs">
+    Show:
+    <a href="?sort={{ sort }}" class="{{ 'active' if not only }}">All</a>
+    <a href="?sort={{ sort }}&only=manufacturing" class="{{ 'active' if only == 'manufacturing' }}">10+ manufacturing</a>
+    <a href="?sort={{ sort }}&only=science" class="{{ 'active' if only == 'science' }}">10+ science</a>
+    <a href="?sort={{ sort }}&only=reactions" class="{{ 'active' if only == 'reactions' }}">10+ reactions</a>
+    <a href="?sort={{ sort }}&only=capital" class="{{ 'active' if only == 'capital' }}">Capital builders</a>
+  </div>
+</div>
+
+{% if rows %}
+<table>
+  <thead><tr>
+    <th><a href="?sort=name&only={{ only }}">Character</a></th>
+    <th><a href="?sort=manufacturing&only={{ only }}">Manufacturing</a></th>
+    <th><a href="?sort=science&only={{ only }}">Science</a></th>
+    <th><a href="?sort=reactions&only={{ only }}">Reactions</a></th>
+    <th><a href="?sort=capital&only={{ only }}">Capital Ship Construction</a></th>
+    <th>Skills synced</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td><img src="https://images.evetech.net/characters/{{ r.character.character_id }}/portrait?size=32" width="24" height="24" style="border-radius:50%;vertical-align:middle" alt="">
+        {{ r.character.name }}</td>
+      <td>{{ slotcell(r, 'manufacturing') }}</td>
+      <td>{{ slotcell(r, 'science') }}</td>
+      <td>{{ slotcell(r, 'reactions') }}</td>
+      <td>{% if r.has_skills %}
+            <strong>{{ 'Level ' ~ r.capital_level if r.capital_level else '—' }}</strong>
+            {% if r.capital_level %}<div class="small">
+              <span class="pill {{ 'ok' if r.capital_level >= 4 else ('warn' if r.capital_level >= 3 else '') }} small">{{ r.capital_label }}</span></div>{% endif %}
+          {% else %}<span class="muted small">no skill data</span>{% endif %}</td>
+      <td class="small muted">{{ r.skills_updated | delta(now) if r.skills_updated else '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<div class="card empty">No characters match.</div>{% endif %}
+
+<p class="small muted">Slots = 1 base + Mass Production + Advanced Mass Production (manufacturing),
+  Laboratory Operation + Advanced Laboratory Operation (science), Mass Reactions + Advanced Mass Reactions (reactions; needs the Reactions skill).
+  Both skills at V = 11. Active skill levels are used, so an alpha clone shows what it can actually run.
+  Capital Ship Construction: I components · III most capitals · IV jump freighters &amp; supercarriers · V titans.</p>
+
+{% if missing %}
+<h2>Characters missing industry access</h2>
+<div class="card">
+  <p class="small">These characters haven't granted the industry scopes yet, so their skills, jobs or blueprints can't be read.
+    Make sure the scopes are enabled on your EVE developer app first, then <a href="/auth/login?profile=industry">re-link with industry scopes</a> while logged in as each character in-game.</p>
+  {% for c, scopes in missing %}
+    <div class="small"><strong>{{ c.name }}</strong> <span class="muted">missing {{ scopes | length }}: {{ scopes | join(', ') }}</span></div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
