@@ -28,8 +28,12 @@ RUN chmod +x /entrypoint.sh
 # so the in-app update check compares against the right branch.
 ARG RELEASE_CHANNEL=stable
 ARG GIT_SHA=unknown
+# The version this build is, worked out by CI (betas: x.y.<next number>). Empty for a
+# local build, which then shows APP_VERSION from app/config.py.
+ARG BUILD_VERSION=
 ENV APP_CHANNEL=$RELEASE_CHANNEL \
-    APP_GIT_SHA=$GIT_SHA
+    APP_GIT_SHA=$GIT_SHA \
+    APP_BUILD_VERSION=$BUILD_VERSION
 
 VOLUME ["/config"]
 EXPOSE 8000

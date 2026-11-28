@@ -2,8 +2,9 @@
 
 Two release channels, baked into the image at build time (see Dockerfile):
   stable  image :latest, built from `main`. An update is a higher APP_VERSION.
-  beta    image :beta, built from `beta`. Every new commit on `beta` is an update,
-          even without a version bump, so it's compared by git commit instead.
+  beta    image :beta, built from `beta`. Every merge into `beta` is the next number
+          (0.7.1, 0.7.2 ...; CI tags each commit v0.7.N-beta). Updates are still detected
+          by commit, and labelled with those numbers.
 """
 import logging
 import os
@@ -39,6 +40,7 @@ class VersionInfo:
     current_sha: str = GIT_SHA
     latest_sha: str | None = None   # beta: head commit of the beta branch
     builds: list[dict] = field(default_factory=list)   # recent images you can switch to
+    sha_versions: dict[str, str] = field(default_factory=dict)  # beta: commit -> 0.7.N
 
     @property
     def newer(self) -> bool:
@@ -48,19 +50,21 @@ class VersionInfo:
                         and self.latest_sha != self.current_sha)
         return bool(self.latest) and parse_version(self.latest) > parse_version(self.current)
 
-    @staticmethod
-    def _label(version: str | None, sha: str | None, channel: str) -> str | None:
-        if version is None:
-            return None
-        return f"{version}-beta+{sha[:7]}" if channel == "beta" and sha else version
 
     @property
     def current_label(self) -> str:
-        return self._label(self.current, self.current_sha, self.channel)
+        # The running image knows its own number (baked in by CI).
+        return f"{self.current} beta" if self.channel == "beta" else self.current
 
     @property
     def latest_label(self) -> str | None:
-        return self._label(self.latest, self.latest_sha, self.channel)
+        """Plain numbers: '0.7.3 beta' on beta (from CI's tag), '0.7.0' on stable."""
+        if self.channel != "beta":
+            return self.latest
+        if not self.latest_sha:
+            return None
+        num = self.sha_versions.get(self.latest_sha)
+        return f"{num} beta" if num else "the newest beta"
 
     @property
     def update_available(self) -> bool:
@@ -142,17 +146,38 @@ def trim_builds(builds: list[dict]) -> list[dict]:
     return out
 
 
-async def recent_builds(client: httpx.AsyncClient, repo: str, commits: list[dict]) -> list[dict]:
+_BETA_TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)-beta$")
+
+
+async def beta_numbers(client: httpx.AsyncClient, repo: str) -> dict[str, str]:
+    """Commit sha -> beta number, from the git tags CI puts on each beta build."""
+    r = await client.get(f"https://api.github.com/repos/{repo}/tags", params={"per_page": 100},
+                         headers={"Accept": "application/vnd.github+json"})
+    if r.status_code != 200:
+        return {}
+    out = {}
+    for t in r.json():
+        m = _BETA_TAG_RE.match(t.get("name", ""))
+        if m:
+            out[t["commit"]["sha"].lower()] = m.group(1)
+    return out
+
+
+async def recent_builds(client: httpx.AsyncClient, repo: str, commits: list[dict],
+                        sha_versions: dict[str, str] | None = None) -> list[dict]:
     """Images you can switch to (see trim_builds).
     beta: recent beta commits whose sha-<commit> image exists.
     stable: released version tags."""
     tags = set(await _ghcr_tags(client, repo))
+    sha_versions = sha_versions or {}
     if CHANNEL == "beta":
         out = []
         for c in commits:
             tag = f"sha-{c.get('full_sha', '')}"
             if tag in tags:
-                out.append({"tag": tag, "label": f"{c['sha']}", "message": c["message"],
+                num = sha_versions.get(c.get("full_sha", ""))
+                out.append({"tag": tag, "label": f"{num} beta" if num else c["sha"],
+                            "message": c["message"],
                             "date": c["date"], "url": c["url"],
                             "current": c.get("full_sha") == GIT_SHA})
         return trim_builds(out[:MAX_BUILDS])
@@ -171,7 +196,7 @@ async def check(force: bool = False) -> VersionInfo:
     repo = get_settings().update_repo
     info = VersionInfo(latest=_cache.latest, commits=_cache.commits,
                        image_ready=_cache.image_ready, latest_sha=_cache.latest_sha,
-                       builds=_cache.builds)
+                       builds=_cache.builds, sha_versions=_cache.sha_versions)
     headers = {"User-Agent": get_settings().user_agent}
     try:
         async with httpx.AsyncClient(timeout=10, headers=headers) as client:
@@ -203,7 +228,9 @@ async def check(force: bool = False) -> VersionInfo:
                 info.image_ready = await image_published(client, repo, tag)
             else:
                 info.image_ready = False
-            info.builds = await recent_builds(client, repo, info.commits)
+            if CHANNEL == "beta":
+                info.sha_versions = await beta_numbers(client, repo)
+            info.builds = await recent_builds(client, repo, info.commits, info.sha_versions)
     except (httpx.HTTPError, KeyError, ValueError) as e:
         info.error = f"Couldn't reach GitHub: {e}"
         log.warning("Version check failed: %s", e)
