@@ -116,6 +116,11 @@ async def _name_containers(db: Session, owner_type: str, owner_id: int, post) ->
     db.commit()
 
 
+def _char_names(db, ids: list[int]) -> list[str]:
+    from app.models import Character
+    return [(c.name if (c := db.get(Character, i)) else str(i)) for i in ids]
+
+
 # ------------------------------------------------------------------ sync
 
 async def sync_assets() -> None:
@@ -173,9 +178,17 @@ async def sync_assets() -> None:
         await resolver.resolve_names(db, type_ids)
         sites = set(db.scalars(select(Asset.site_id).distinct()))
         budget = resolver.LookupBudget(get_settings().max_location_lookups_per_sync)
+        owners: dict[int, list[int]] = {}
+        for site, oid in db.execute(select(Asset.site_id, Asset.owner_id)
+                                    .where(Asset.owner_type == "character").distinct()):
+            owners.setdefault(site, []).append(oid)
         for site in sorted(sites, key=lambda s: not is_station(s)):
             if not is_system(site):
-                await resolver.resolve_location(db, site, structure_token, budget)
+                # The items' owner first: they're the one most likely to have access.
+                who = owners.get(site, [])
+                await resolver.resolve_location(
+                    db, site, None if who else structure_token, budget, prefer=who,
+                    source="assets of " + (", ".join(_char_names(db, who)) if who else "a corp"))
         # Item groups (for the Materials page): watched items first, then everything else.
         watched = set(db.scalars(select(Asset.type_id).where(watch_filter(db)).distinct()))
         await resolve_types(db, watched, budget=TYPE_LOOKUPS_PER_RUN)
