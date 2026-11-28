@@ -23,6 +23,18 @@ def open_job_count(db: Session) -> int:
         BulkJob.status.in_(svc.OPEN_JOB))) or 0
 
 
+def new_job_count(db: Session) -> int:
+    """Jobs with nothing accepted yet: they need you to accept contracts in game."""
+    return db.scalar(select(func.count()).select_from(BulkJob).where(
+        BulkJob.status == "new")) or 0
+
+
+def waiting_job_count(db: Session) -> int:
+    """Open jobs that still have contracts for you to accept (new or partly accepted)."""
+    return sum(1 for j in db.scalars(select(BulkJob).where(BulkJob.status.in_(svc.OPEN_JOB)))
+               if j.waiting)
+
+
 def _items(db: Session, contracts: list[Contract]) -> list[dict]:
     """Everything in these contracts, one line per item type (copies apart)."""
     lines: dict[tuple[int, bool], dict] = {}
@@ -50,7 +62,9 @@ def bulk_list(request: Request, view: str = "open", db: Session = Depends(get_db
     dests = {s.system_id: s for s in db.scalars(select(MapSystem).where(
         MapSystem.system_id.in_({j.dest_system_id for j in jobs if j.dest_system_id})))}
     return render(request, "contracts_bulk.html", jobs=jobs, view=view, dests=dests,
-                  now=utcnow(), open_jobs=open_job_count(db), FINISHED_EX=FINISHED_EX)
+                  now=utcnow(), open_jobs=open_job_count(db), new_jobs=new_job_count(db),
+                  waiting_jobs=waiting_job_count(db),
+                  FINISHED_EX=FINISHED_EX)
 
 
 @router.get("/contracts/bulk/{job_id}")
@@ -71,7 +85,9 @@ def bulk_job(request: Request, job_id: int, db: Session = Depends(get_db)):
                   clip=clipboard_text([(i["name"], i["qty"]) for i in items]),
                   clip_by_contract={cid: clipboard_text([(i["name"], i["qty"]) for i in rows])
                                     for cid, rows in per_contract.items()},
-                  now=utcnow(), open_jobs=open_job_count(db), FINISHED_EX=FINISHED_EX)
+                  now=utcnow(), open_jobs=open_job_count(db), new_jobs=new_job_count(db),
+                  waiting_jobs=waiting_job_count(db),
+                  FINISHED_EX=FINISHED_EX)
 
 
 def _isk(text: str) -> float | None:

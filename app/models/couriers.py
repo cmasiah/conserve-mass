@@ -178,8 +178,23 @@ class BulkJob(Base):
                                                      order_by="Contract.date_issued")
 
     @property
+    def live(self) -> list[Contract]:
+        """Contracts still part of the job: not deleted, cancelled, rejected or expired
+        unaccepted. Totals and value count these only."""
+        return [c for c in self.contracts if not is_withdrawn(c)]
+
+    @property
+    def withdrawn(self) -> list[Contract]:
+        return [c for c in self.contracts if is_withdrawn(c)]
+
+    @property
+    def waiting(self) -> list[Contract]:
+        """Not accepted yet and still acceptable."""
+        return [c for c in self.live if c.status == "outstanding"]
+
+    @property
     def upfront_isk(self) -> float:
-        return sum(c.reward_isk or 0 for c in self.contracts)
+        return sum(c.reward_isk or 0 for c in self.live)
 
     @property
     def price_mode(self) -> str:
@@ -188,11 +203,11 @@ class BulkJob(Base):
 
     @property
     def m3(self) -> float:
-        return sum(c.volume_m3 or 0 for c in self.contracts)
+        return sum(c.volume_m3 or 0 for c in self.live)
 
     @property
     def value_isk(self) -> float:
-        return sum(c.value_isk or 0 for c in self.contracts)
+        return sum(c.value_isk or 0 for c in self.live)
 
     @property
     def exposure_isk(self) -> float:
@@ -200,7 +215,7 @@ class BulkJob(Base):
         value while they're in your hands (accepted, not yet delivered)."""
         if self.status in ("delivered", "closed"):
             return 0.0
-        held = sum(c.value_isk or 0 for c in self.contracts if c.status in FINISHED_EX)
+        held = sum(c.value_isk or 0 for c in self.live if c.status in FINISHED_EX)
         if self.return_collateral_isk and held:
             return self.return_collateral_isk
         return held
@@ -212,3 +227,12 @@ class BulkJob(Base):
 
 # An item exchange the corp accepted shows as finished: the goods are ours to haul.
 FINISHED_EX = ("finished", "finished_contractor", "finished_issuer")
+WITHDRAWN_EX = ("deleted", "cancelled", "rejected", "reversed", "failed")
+
+
+def is_withdrawn(c: Contract) -> bool:
+    """Gone without us taking the goods: withdrawn by the issuer, or expired unaccepted
+    (ESI keeps showing those as 'outstanding' past their expiry date)."""
+    if c.status in WITHDRAWN_EX:
+        return True
+    return bool(c.status == "outstanding" and c.date_expired and c.date_expired <= utcnow())

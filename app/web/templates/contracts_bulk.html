@@ -22,14 +22,14 @@
   </tr></thead>
   <tbody>
   {% for j in jobs %}
-    {%- set taken = j.contracts | selectattr('status', 'in', FINISHED_EX) | list | length -%}
-    {%- set waiting = j.contracts | selectattr('status', 'equalto', 'outstanding') | list -%}
-    {%- set systems = j.contracts | map(attribute='start_location') | select | map(attribute='system_name') | select | unique | list -%}
+    {%- set taken = j.live | selectattr('status', 'in', FINISHED_EX) | list | length -%}
+    {%- set waiting = j.waiting -%}
+    {%- set systems = j.live | map(attribute='start_location') | select | map(attribute='system_name') | select | unique | list -%}
     <tr>
       <td><a href="/contracts/bulk/{{ j.id }}"><strong>{{ j.title or (j.customer.name if j.customer and j.customer.name else j.issuer_id) }}</strong></a>
         <div class="small muted">{{ j.first_issued_at.strftime('%Y-%m-%d %H:%M') }} EVE</div></td>
       <td><span class="pill small job-{{ j.status }}">{{ j.status }}</span></td>
-      <td class="num">{{ taken }} / {{ j.contracts | length }}<div class="small muted">accepted</div></td>
+      <td class="num">{{ taken }} / {{ j.live | length }}<div class="small muted">accepted{% if j.withdrawn %} · {{ j.withdrawn | length }} gone{% endif %}</div></td>
       <td class="small">{{ systems[:3] | join(', ') }}{% if systems | length > 3 %} +{{ systems | length - 3 }}{% endif %}</td>
       <td class="num">{{ j.m3 | m3 }}</td>
       <td class="num">{{ j.value_isk | isk if j.value_isk else '—' }}</td>

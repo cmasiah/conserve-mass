@@ -1,5 +1,12 @@
-{#- Couriers | Bulk jobs, at the top of the Hauling Contracts pages. -#}
+{#- Couriers | Bulk jobs, at the top of the Hauling Contracts pages. While any job has
+    contracts waiting to be accepted, the tab glows gold with a sticker: "N new" for jobs
+    with nothing accepted yet, otherwise "N to accept". -#}
+{%- set attention = new_jobs or waiting_jobs -%}
 <div class="tabs page-tabs">
   <a href="/contracts" class="{{ 'active' if not request.url.path.startswith('/contracts/bulk') }}">Couriers</a>
-  <a href="/contracts/bulk" class="{{ 'active' if request.url.path.startswith('/contracts/bulk') }}">Bulk jobs{% if open_jobs %} <span class="tab-n">{{ open_jobs }}</span>{% endif %}</a>
+  <a href="/contracts/bulk" class="{{ 'active' if request.url.path.startswith('/contracts/bulk') }} {{ 'has-new' if attention }}"
+     title="{{ open_jobs }} open job{{ 's' if open_jobs != 1 }}{{ ' · ' ~ waiting_jobs ~ ' with contracts to accept in game' if waiting_jobs }}">Bulk jobs
+    {% if new_jobs %}<span class="new-sticker">{{ new_jobs }} new</span>
+    {% elif waiting_jobs %}<span class="new-sticker">{{ waiting_jobs }} to accept</span>
+    {% elif open_jobs %}<span class="tab-n">{{ open_jobs }}</span>{% endif %}</a>
 </div>

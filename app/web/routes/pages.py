@@ -53,7 +53,8 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     in_progress = db.scalars(select(Contract).where(Contract.status == "in_progress", not_blocked)
                              .order_by(Contract.date_accepted)).all()
     hidden_blocked = db.scalar(select(func.count()).select_from(Contract).where(
-        Contract.status.in_(OPEN_STATUSES), ~not_blocked))
+        Contract.status.in_(OPEN_STATUSES), Contract.type == "courier",
+        Contract.issuer_id.in_(select(Customer.character_id).where(Customer.blocked.is_(True)))))
     flagged = db.scalars(select(Customer).where(Customer.muted.is_(True),
                                                 Customer.flagged_at.is_not(None),
                                                 Customer.flagged_at >= now - timedelta(days=1))
@@ -69,9 +70,14 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     sync = db.get(SyncState, f"corp_contracts:{corp.corporation_id}") if corp else None
     pending = db.scalar(select(func.count()).select_from(Notification)
                         .where(Notification.status == "pending"))
+    from app.models import BulkJob
     from app.services import exposure
-    from app.web.routes.bulk import open_job_count
+    from app.web.routes.bulk import new_job_count, open_job_count
+    bulk_jobs = db.scalars(select(BulkJob).where(BulkJob.status.in_(("new", "accepted", "hauling")))
+                           .order_by(BulkJob.first_issued_at)).all()
+    bulk_waiting = sum(len(j.waiting) for j in bulk_jobs)
     return render(request, "dashboard.html", outstanding=outstanding, in_progress=in_progress,
+                  bulk_jobs=bulk_jobs, bulk_waiting=bulk_waiting, new_jobs=new_job_count(db),
                   exposure=exposure.summary(db, now), top_exposure=exposure.top_exposure(db),
                   open_jobs=open_job_count(db),
                   done_30d=done_30d, corp=corp, sync=sync, pending=pending, now=now,
@@ -94,8 +100,10 @@ def contracts(request: Request, status: str = "open", q: str = "",
         stmt = stmt.join(Customer).where(Customer.name.ilike(f"%{q}%"))
     rows = db.scalars(stmt.limit(500)).unique().all()
     from app.web.routes.bulk import open_job_count
+    from app.web.routes.bulk import new_job_count, waiting_job_count
     return render(request, "contracts.html", rows=rows, status=status, q=q, now=utcnow(),
-                  open_jobs=open_job_count(db))
+                  open_jobs=open_job_count(db), new_jobs=new_job_count(db),
+                  waiting_jobs=waiting_job_count(db))
 
 
 @router.get("/contracts/{contract_id}")
@@ -127,12 +135,14 @@ def contract_update(request: Request, contract_id: int, work_status: str = Form(
 
 
 @router.get("/customers")
-def customers(request: Request, sort: str = "completed", all: int = 0,
+def customers(request: Request, sort: str = "completed", all: int = 0, blocked: int = 0,
               db: Session = Depends(get_db)):
     from app.services import exposure
     extra = exposure.per_customer(db)
     rows = customer_stats(db, order=sort, completed_only=False)
-    if not all:
+    if blocked:
+        rows = [s for s in rows if s.customer.blocked or s.customer.muted]
+    elif not all:
         # Customers: a delivered courier, or any bulk job.
         rows = [s for s in rows if s.completed or extra.get(s.customer.character_id, {}).get("bulk_jobs")]
     blank = {"exposure": 0.0, "hauled": 0.0, "bulk_jobs": 0, "bulk_m3": 0.0, "bulk_earned": 0.0}
@@ -141,7 +151,7 @@ def customers(request: Request, sort: str = "completed", all: int = 0,
     elif sort == "hauled":
         rows.sort(key=lambda s: -extra.get(s.customer.character_id, blank)["hauled"])
     return render(request, "customers.html", rows=rows, sort=sort, show_all=bool(all),
-                  ext=extra, blank=blank)
+                  ext=extra, blank=blank, only_blocked=bool(blocked))
 
 
 @router.get("/customers/{character_id}")

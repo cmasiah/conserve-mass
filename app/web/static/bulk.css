@@ -26,3 +26,5 @@ td.nearest { color: var(--ok); font-weight: 600; }
 .bulk-kpis .kpi-v { font-size: 22px; font-weight: 700; }
 .bulk-kpis .kpi-l { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .bulk-kpis .kpi-s { font-size: 12px; color: var(--muted); }
+.bulk-contracts tr.gone td { opacity: .45; }
+.bulk-contracts tr.gone td:first-child a { text-decoration: line-through; }

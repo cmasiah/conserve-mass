@@ -15,10 +15,10 @@
   <span class="small muted">from <a href="/customers/{{ job.issuer_id }}">{{ who }}</a> · {{ job.first_issued_at.strftime('%Y-%m-%d %H:%M') }} EVE</span>
 </div>
 
-{% set taken = job.contracts | selectattr('status', 'in', FINISHED_EX) | list | length %}
+{% set taken = job.live | selectattr('status', 'in', FINISHED_EX) | list | length %}
 <div class="route-sum bulk-kpis">
-  <div class="kpi"><span class="kpi-v">{{ taken }} / {{ job.contracts | length }}</span><span class="kpi-l">contracts accepted</span>
-    <span class="kpi-s">{{ pickups | length }} pickup system{{ 's' if pickups | length != 1 }}</span></div>
+  <div class="kpi"><span class="kpi-v">{{ taken }} / {{ job.live | length }}</span><span class="kpi-l">contracts accepted</span>
+    <span class="kpi-s">{{ pickups | length }} pickup system{{ 's' if pickups | length != 1 }}{% if job.withdrawn %} · {{ job.withdrawn | length }} deleted/expired, not counted{% endif %}</span></div>
   <div class="kpi"><span class="kpi-v">{{ job.m3 | m3 }}</span><span class="kpi-l">to haul</span></div>
   <div class="kpi"><span class="kpi-v">{{ job.value_isk | isk if job.value_isk else '—' }}</span><span class="kpi-l">goods value · Jita buy</span>
     <span class="kpi-s">{% if price_source == 'esi' %}<span class="warn-text">estimate (CCP average; Jita prices unavailable)</span>{% elif job.priced_at %}priced {{ job.priced_at | delta(now) }}{% else %}pricing…{% endif %}</span></div>
@@ -88,11 +88,11 @@
   <table class="compact bulk-contracts">
     <thead><tr><th>Contract</th><th>Pickup</th><th>Status</th><th class="num">m³</th><th class="num">Value</th><th class="num">Reward</th><th>Timing</th><th></th></tr></thead>
     <tbody>
-    {% for c in job.contracts %}
-      <tr>
+    {% for c in job.contracts %}{% set gone = c in job.withdrawn %}
+      <tr class="{{ 'gone' if gone }}">
         <td><a href="/contracts/{{ c.contract_id }}">#{{ c.contract_id }}</a>{% if c.title %}<div class="small muted">{{ c.title }}</div>{% endif %}</td>
         <td>{{ place(c.start_location) }}</td>
-        <td><span class="pill small {{ 'ok' if c.status in FINISHED_EX else ('warn' if c.status == 'outstanding' else 'bad') }}">{{ 'accepted' if c.status in FINISHED_EX else c.status }}</span></td>
+        <td><span class="pill small {{ 'ok' if c.status in FINISHED_EX else ('muted' if gone else 'warn') }}">{{ 'accepted' if c.status in FINISHED_EX else ('expired' if gone and c.status == 'outstanding' else c.status) }}</span></td>
         <td class="num">{{ c.volume_m3 | m3 }}</td>
         <td class="num">{{ c.value_isk | isk if c.value_isk else '—' }}</td>
         <td class="num">{{ c.reward_isk | isk if c.reward_isk else '0' }}</td>

@@ -30,6 +30,12 @@
         </label>
       {% endfor %}
 
+      {% if group == 'Hauling' %}
+        <label class="expiry-row"><span><strong>Warning window</strong>
+          <span class="small muted">How long before a deadline the "expiring soon" and "delivery deadline" alerts above fire. Your choice, not the game's.</span></span>
+          <span class="expiry-input"><input type="number" name="expiry_hours" min="1" max="720" value="{{ expiry_hours }}"> hours</span></label>
+      {% endif %}
+
       {% if group == 'Industry' %}
         {% set watched = items | selectattr('0.key', 'equalto', 'industry_job_ready') | list %}
         <div class="watch">
