@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db import utcnow
 from app.esi import client as esi
-from app.models import EntityName, Location
+from app.models import EntityName, EsiToken, Location
 
 log = logging.getLogger(__name__)
 
@@ -116,8 +116,27 @@ async def _system(system_id: int) -> tuple[str | None, float | None]:
         return None, None
 
 
+SCOPE_STRUCTURES = "esi-universe.read_structures.v1"
+MAX_STRUCTURE_TRIES = 4     # a 403 costs rate-limit tokens and counts as an ESI error
+
+
+def structure_readers(db: Session, prefer: list[int] | tuple = ()) -> list[tuple[int, str]]:
+    """Characters that can ask ESI for structure names, `prefer` (e.g. the items' owner)
+    first. Structure access is per character, so one character's 403 says nothing about
+    the others."""
+    toks = [t for t in db.scalars(select(EsiToken).where(EsiToken.is_valid.is_(True)))
+            if SCOPE_STRUCTURES in t.scope_set]
+    order = {cid: i for i, cid in enumerate(prefer)}
+    toks.sort(key=lambda t: order.get(t.character_id, len(order)))
+    return [(t.character_id, t.character.name if t.character else str(t.character_id))
+            for t in toks]
+
+
 async def resolve_location(db: Session, location_id: int | None, token: str | None = None,
-                           budget: LookupBudget | None = None) -> Location | None:
+                           budget: LookupBudget | None = None, *,
+                           prefer: list[int] | tuple = (), source: str = "") -> Location | None:
+    """Name a station or structure. For structures, try `token` (if given), then the
+    preferred characters, then the rest, until one of them has access."""
     if not location_id:
         return None
     loc = db.get(Location, location_id)
@@ -131,19 +150,41 @@ async def resolve_location(db: Session, location_id: int | None, token: str | No
     loc = loc or Location(location_id=location_id)
     db.add(loc)
     loc.resolved_at = utcnow()
+    where = f" ({source})" if source else ""
     try:
         if location_id < STATION_ID_MAX:
             info = await esi.get(f"/universe/stations/{location_id}")
             loc.kind, loc.name, loc.system_id = "station", info["name"], info["system_id"]
         else:
             loc.kind = "structure"
+            denied: list[str] = []
+            attempts: list[tuple[str, str | None, int | None]] = []
             if token:
-                info = await esi.get(f"/universe/structures/{location_id}", token=token)
+                attempts.append(("the sync's character", token, None))
+            attempts += [(name, None, cid) for cid, name in structure_readers(db, prefer)]
+            info = None
+            for name, tok, cid in attempts[:MAX_STRUCTURE_TRIES]:
+                if tok is None:
+                    try:
+                        tok = await esi.access_token(db, cid)
+                    except esi.NoValidToken:
+                        continue
+                try:
+                    info = await esi.get(f"/universe/structures/{location_id}", token=tok)
+                    break
+                except esi.EsiError as e:
+                    if e.status != 403:
+                        raise
+                    denied.append(name)
+            if info:
                 loc.name, loc.system_id = info["name"], info["solar_system_id"]
+            else:
+                log.info("Structure %s%s: no access for %s; retrying in 24h", location_id,
+                         where, ", ".join(dict.fromkeys(denied)) or "any character "
+                         "(none has the structures scope)")
         if loc.system_id:
             loc.system_name, loc.security = await _system(loc.system_id)
     except esi.EsiError as e:
-        # 403 = no docking access to that structure. Keep the row, retry later.
-        log.info("Location %s unresolved: %s", location_id, e)
+        log.info("Location %s%s unresolved: %s", location_id, where, e)
     db.flush()
     return loc
