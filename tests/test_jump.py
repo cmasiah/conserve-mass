@@ -54,14 +54,14 @@ def test_profile_applies_skills_fit_and_overrides(db):
     for sid, name, lvl in [(21611, "Jump Drive Calibration", 5), (21610, "Jump Fuel Conservation", 5),
                            (29029, "Jump Freighters", 4), (20528, "Minmatar Freighter", 5),
                            (28846, "Nomad", 0), (5001, "Prototype Jump Drive Economizer", 0),
-                           (5002, "ORE Expanded Cargohold", 0)]:
+                           (5002, "ORE Expanded Cargohold", 0), (5003, "Expanded Cargohold II", 0)]:
         db.add(EntityName(entity_id=sid, name=name, category="inventory_type"))
         if lvl:
             db.add(CharacterSkill(character_id=1, skill_id=sid, trained_level=lvl, active_level=lvl))
     ship = 9_000_000_001
     db.add(Asset(item_id=ship, owner_type="character", owner_id=1, type_id=28846, quantity=1,
                  location_id=60003760, site_id=60003760, updated_at=NOW))
-    for i, (t, flag) in enumerate([(5001, "LoSlot0"), (5002, "LoSlot1"), (5002, "LoSlot2")]):
+    for i, (t, flag) in enumerate([(5001, "LoSlot0"), (5002, "LoSlot1"), (5003, "LoSlot2")]):
         db.add(Asset(item_id=ship + 1 + i, owner_type="character", owner_id=1, type_id=t,
                      quantity=1, location_id=ship, location_flag=flag, site_id=60003760,
                      container_id=ship, updated_at=NOW))
@@ -71,15 +71,19 @@ def test_profile_applies_skills_fit_and_overrides(db):
     db.add(jp)
     db.commit()
     p = jump.profile(db, jp, db.get(Character, 1), jump.bonuses(db))
-    assert (p.ship_name, p.economizers, p.expanders, p.fit_source) == ("Nomad", 1, 2, "assets")
+    # ORE and T2 expanders are told apart.
+    assert (p.ship_name, p.economizers, p.ore, p.t2, p.fit_source) == ("Nomad", 1, 1, 1, "assets")
     assert p.range_ly == pytest.approx(10.0)                       # 5 × (1 + 0.2×5)
     assert p.fuel_per_ly == pytest.approx(10000 * 0.5 * 0.6 * 0.9)  # JFC5, JF4, 1 economizer
-    assert p.cargo_m3 == pytest.approx(100000 * 1.25 * 1.275 ** 2)  # Minmatar Freighter 5, 2 exp.
+    assert p.cargo_m3 == pytest.approx(100000 * 1.25 * 1.275 * 1.275)  # racial 5, ORE + T2
     assert p.fuel_name == "Hydrogen Isotopes"
-    jp.fuel_override, jp.economizers, jp.expanders = 2500, 3, 0
+    jp.fuel_override, jp.economizers, jp.expanders, jp.t2_expanders = 2500, 3, 0, 0
     p = jump.profile(db, jp, db.get(Character, 1), jump.bonuses(db))
     assert p.fuel_per_ly == 2500 and "fuel_per_ly" in p.overridden and p.fit_source == "manual"
     assert p.cargo_m3 == pytest.approx(100000 * 1.25)
+    # Leg-specific numbers for the packing ledger: loaded with 3 ORE, empty with 3 economizers.
+    assert p.cargo_with(3) == pytest.approx(100000 * 1.25 * 1.275 ** 3)
+    assert p.fuel_with(3) == pytest.approx(10000 * 0.5 * 0.6 * 0.9 ** 3)
 
 
 # ------------------------------------------------------------------ routing
@@ -223,7 +227,9 @@ def test_route_page_shows_legs_fuel_and_cost(client):
     html = client.get("/jump?tab=route&frm=jita&to=ac2e-3").text
     assert "<strong>Low2</strong>" in html and "<strong>AC2E-3</strong>" in html
     assert "18,000" in html and "Hydrogen Isotopes" in html
-    assert '<option value="Null3">' in html              # autocomplete list
+    assert 'data-ac' in html                              # autocomplete on From / To
+    hits = client.get("/jump/systems?q=ac2e").json()
+    assert hits[0]["name"] == "AC2E-3" and hits[0]["region"] == "Fountain"
 
 
 def test_pilots_and_cyno_pages(client, world):
@@ -236,3 +242,116 @@ def test_pilots_and_cyno_pages(client, world):
     world.expire_all()
     assert world.get(CynoPoint, 3).label == "alt"
     assert "Null3" in client.get("/jump?tab=cynos").text
+
+
+# ------------------------------------------------------------------ search, feedback, ledger
+
+def test_fuzzy_system_search(world):
+    from app.services.jump import search_systems
+    names = lambda q: [h["name"] for h in search_systems(world, q)]  # noqa: E731
+    assert names("ac2e")[0] == "AC2E-3"          # dash ignored
+    assert names("AC2E-3")[0] == "AC2E-3"
+    assert names("jta") == ["Jita"]               # letters in order
+    assert names("low")[:2] == ["Low1", "Low2"]  # starts-with before contains
+    assert search_systems(world, "hsmid")[0]["cyno"] is False
+
+
+def test_plan_route_without_map_or_pilot_explains_why(db):
+    from fastapi.testclient import TestClient
+    from starlette.requests import Request
+    from app.main import app
+
+    async def login(request: Request):
+        request.session["user"] = {"character_id": 1, "name": "x"}
+        return {}
+    app.add_api_route("/__test/login8", login)
+    try:
+        c = TestClient(app)
+        c.get("/__test/login8")
+        html = c.get("/jump?tab=route&frm=jita&to=ac2e").text
+        assert "Download the star map first" in html
+        assert "Needs the star map" in html and "disabled" in html.split("Plan route")[0][-200:]
+    finally:
+        app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", "") != "/__test/login8"]
+
+
+def test_parse_items_inventory_paste_and_plain_lines():
+    from app.services.jump import parse_items
+    paste = ("Tritanium\t25,000,000\tMineral\t\t\t250,000 m3\n"
+             "Capital Armor Plates\t40\tCapital Construction Components\t\t\t400,000.00 m3\n"
+             "Tritanium\t5,000,000\tMineral\t\t\t50,000 m3\n"
+             "Nomad\t\tJump Freighter\t\t\t1,300,000 m3\n"
+             "Megacyte 1,000\n"
+             "Fullerides x 2500\n"
+             "this line is junk\n")
+    items, bad = parse_items(paste)
+    by = {i.name: i for i in items}
+    assert by["Tritanium"].qty == 30_000_000 and by["Tritanium"].unit_m3 == pytest.approx(0.01)
+    assert by["Capital Armor Plates"].unit_m3 == pytest.approx(10_000)
+    assert by["Nomad"].qty == 1 and by["Nomad"].unit_m3 == 1_300_000
+    assert by["Megacyte"].qty == 1000 and by["Megacyte"].unit_m3 is None   # looked up later
+    assert by["Fullerides"].qty == 2500
+    assert bad == ["this line is junk"]
+
+
+def _hauler(cid, cargo, fuel=2700, econ_vol=10_500):
+    from app.services.jump import BONUS_DEFAULTS, Hauler, Profile
+    p = Profile(cid, f"JF{cid}", ship_name="Nomad", range_ly=10, fuel_per_ly=fuel,
+                cargo_m3=cargo, fuel_type=17889, hull_fuel=fuel, hull_cargo=cargo,
+                bonus={**BONUS_DEFAULTS, "economizer_volume": econ_vol,
+                       "ore_expander_cargo": 0.0, "t2_expander_cargo": 0.0})
+    return Hauler(p, loaded_ore=3, return_econ=3)
+
+
+def test_hold_space_is_kept_for_economizers_carried_out():
+    h = _hauler(1, 400_000)
+    assert h.carried_econ == 3 and h.capacity == 400_000 - 3 * 10_500
+    h.loaded_ore = 2                # one low already holds an economizer on the way out
+    assert h.carried_econ == 2 and h.capacity == 400_000 - 2 * 10_500
+    assert h.fuel_empty < h.fuel_loaded
+
+
+def test_bulk_haul_waves_split_stacks_and_trim_the_last_wave(world):
+    from app.services.jump import Item, plan_haul, plan_route
+    jfs = [_hauler(1, 400_000), _hauler(2, 400_000), _hauler(3, 380_000)]
+    cap = sum(h.capacity for h in jfs)                     # ~1.11m per wave
+    items = [Item("Tritanium", 300_000_000, 0.01),          # 3,000,000 m3, has to be split
+             Item("Capital Armor Plates", 30, 10_000),      # 300,000 m3: fits one hold
+             Item("Nomad", 1, 1_300_000)]                   # doesn't fit any JF
+    routes = {h.profile.character_id: plan_route(world, 30000142, 4, h.profile) for h in jfs}
+    plan = plan_haul(items, jfs, routes, round_trip=True)
+    assert [i.name for i in plan.too_big] == ["Nomad"]
+    assert plan.total_m3 == pytest.approx(3_300_000)
+    assert plan.waves == 4 and len(plan.loads) == 10        # 3+3+3 full, then 1 for the rest
+    last = [ld for ld in plan.loads if ld.wave == 4]
+    assert len(last) == 1                                     # fewest JFs for the remainder
+    for ld in plan.loads:
+        assert ld.m3 <= ld.hauler.capacity + 1e-6
+    moved = sum(q for ld in plan.loads for n, q, _ in ld.items if n == "Tritanium")
+    assert moved == 300_000_000                               # nothing lost when splitting
+    plates = [q for ld in plan.loads for n, q, _ in ld.items if n == "Capital Armor Plates"]
+    assert plates == [30]                                     # kept whole where it fits
+    assert plan.total_jumps == 10 * 2 * 2                     # 2 jumps each way per trip
+    assert any("Tritanium" in ld.clip() for ld in plan.loads)
+    scraps = [m3 for ld in plan.loads for n, _q, m3 in ld.items if m3 < 1000]
+    assert len(scraps) <= 1                                   # only the stack's last bit
+
+
+def test_bulk_haul_never_overfills_overflow_loads():
+    from app.services.jump import Item, plan_haul
+    # One small JF and a stack of plates that don't pack evenly: whatever doesn't fit
+    # the planned waves gets more loads, each within the hold.
+    jf = _hauler(1, 25_000, econ_vol=0)
+    plan = plan_haul([Item("Capital Armor Plates", 7, 10_000)], [jf])
+    assert sum(q for ld in plan.loads for _n, q, _m in ld.items) == 7
+    for ld in plan.loads:
+        assert ld.m3 <= jf.capacity + 1e-6
+
+
+def test_haul_page_end_to_end(client, world):
+    html = client.post("/jump/haul", data={
+        "csrf": "t", "items": "Tritanium\t50,000,000\tMineral\t\t\t500,000 m3",
+        "frm": "jita", "to": "ac2e", "reward": "500m", "round_trip": "1", "pilot": "1",
+        "ore_1": "3", "econ_1": "3"}).text
+    assert "Wave 1" in html and "Wave 2" in html            # 500k m3 over a ~318k hold
+    assert "jumps in total" in html and "reward per jump" in html

@@ -33,7 +33,8 @@ class JumpPilot(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     ship_type_id: Mapped[int | None] = mapped_column(BigInteger)
     economizers: Mapped[int | None] = mapped_column(Integer)     # None = read from the fit
-    expanders: Mapped[int | None] = mapped_column(Integer)
+    expanders: Mapped[int | None] = mapped_column(Integer)      # ORE Expanded Cargoholds
+    t2_expanders: Mapped[int | None] = mapped_column(Integer)   # Expanded Cargohold IIs
     range_override: Mapped[float | None] = mapped_column(Float)   # LY
     fuel_override: Mapped[float | None] = mapped_column(Float)    # isotopes per LY
     cargo_override: Mapped[float | None] = mapped_column(Float)   # m3

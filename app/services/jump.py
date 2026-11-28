@@ -37,14 +37,17 @@ ATTR_FUEL_TYPE, ATTR_RANGE, ATTR_FUEL = 866, 867, 868
 ISOTOPES = {17889: "Hydrogen Isotopes", 17887: "Oxygen Isotopes", 16274: "Helium Isotopes",
             17888: "Nitrogen Isotopes"}
 
-# Bonus sizes (fraction per level / per module). Defaults; editable on the Pilots tab.
+# Bonus sizes (fraction per level / per module) and module volume. Defaults; "Refresh ship
+# data" reads the module numbers from the game data, and all are editable on Pilots & ships.
 BONUS_DEFAULTS = {
-    "range_per_jdc": 0.20,       # Jump Drive Calibration: +20% range per level
-    "fuel_per_jfc": 0.10,        # Jump Fuel Conservation: -10% fuel per level
-    "fuel_per_jf": 0.10,         # Jump Freighters: -10% fuel per level
-    "cargo_per_racial": 0.05,    # <Race> Freighter: +5% cargo per level
-    "economizer_fuel": 0.10,     # each Jump Drive Economizer: -X% fuel
-    "expander_cargo": 0.275,     # each Expanded Cargohold: +X% cargo
+    "range_per_jdc": 0.20,        # Jump Drive Calibration: +20% range per level
+    "fuel_per_jfc": 0.10,         # Jump Fuel Conservation: -10% fuel per level
+    "fuel_per_jf": 0.10,          # Jump Freighters: -10% fuel per level
+    "cargo_per_racial": 0.05,     # <Race> Freighter: +5% cargo per level
+    "economizer_fuel": 0.10,      # each Jump Drive Economizer: -X% fuel
+    "ore_expander_cargo": 0.275,  # each ORE Expanded Cargohold: +X% cargo
+    "t2_expander_cargo": 0.275,   # each Expanded Cargohold II: +X% cargo
+    "economizer_volume": 10500,   # m3 an unfitted economizer takes in the hold
 }
 BONUS_LABELS = {
     "range_per_jdc": "Jump Drive Calibration: range per level",
@@ -52,8 +55,23 @@ BONUS_LABELS = {
     "fuel_per_jf": "Jump Freighters: fuel saved per level",
     "cargo_per_racial": "Racial Freighter skill: cargo per level",
     "economizer_fuel": "Jump Drive Economizer: fuel saved each",
-    "expander_cargo": "Expanded Cargohold: cargo added each",
+    "ore_expander_cargo": "ORE Expanded Cargohold: cargo added each",
+    "t2_expander_cargo": "Expanded Cargohold II: cargo added each",
+    "economizer_volume": "Economizer carried in the hold: volume each",
 }
+BONUS_UNITS = {k: "%" for k in BONUS_DEFAULTS} | {"economizer_volume": "m³"}
+LOW_SLOTS = 3
+MODULE_NAMES = {"economizer": "Prototype Jump Drive Economizer",
+                "ore": "ORE Expanded Cargohold", "t2": "Expanded Cargohold II"}
+
+
+def module_kind(name: str) -> str | None:
+    """Which low-slot module a fitted item is (by name)."""
+    if "Jump Drive Economizer" in name:
+        return "economizer"
+    if "Expanded Cargohold" in name:
+        return "ore" if name.startswith("ORE ") else "t2"
+    return None
 
 
 # ------------------------------------------------------------------ settings helpers
@@ -173,8 +191,12 @@ class Profile:
     base: dict | None = None
     skills: dict[str, int] = field(default_factory=dict)
     economizers: int = 0
-    expanders: int = 0
+    ore: int = 0                      # ORE Expanded Cargoholds fitted
+    t2: int = 0                       # Expanded Cargohold IIs fitted
     fit_source: str = "none"          # "assets" | "manual" | "none"
+    hull_fuel: float = 0.0            # isotopes/LY after skills, before modules
+    hull_cargo: float = 0.0           # m3 after skills, before modules
+    bonus: dict = field(default_factory=dict)
     range_ly: float = 0.0
     fuel_per_ly: float = 0.0
     cargo_m3: float = 0.0
@@ -191,6 +213,18 @@ class Profile:
     def ready(self) -> bool:
         return self.range_ly > 0 and self.fuel_per_ly > 0
 
+    def fuel_with(self, economizers: int) -> float:
+        """Isotopes per LY with this many economizers fitted (for a leg's own fit)."""
+        if not self.hull_fuel:
+            return self.fuel_per_ly
+        return self.hull_fuel * (1 - self.bonus["economizer_fuel"]) ** economizers
+
+    def cargo_with(self, ore: int, t2: int = 0) -> float:
+        if not self.hull_cargo:
+            return self.cargo_m3
+        return (self.hull_cargo * (1 + self.bonus["ore_expander_cargo"]) ** ore
+                * (1 + self.bonus["t2_expander_cargo"]) ** t2)
+
 
 def _skill_levels(db: Session, character_id: int) -> dict[str, int]:
     rows = db.execute(select(EntityName.name, CharacterSkill.active_level).join(
@@ -199,37 +233,45 @@ def _skill_levels(db: Session, character_id: int) -> dict[str, int]:
     return {n: lvl for n, lvl in rows}
 
 
-def detect_ship(db: Session, character_id: int) -> tuple[int | None, int, int, bool]:
-    """(ship type, economizers, expanders, found) from the character's assets: the first
-    jump freighter it owns, and the modules fitted in its low slots."""
+def detect_ship(db: Session, character_id: int) -> tuple[int | None, dict[str, int], bool]:
+    """(ship type, {economizer/ore/t2: count}, found) from the character's assets: the first
+    jump freighter it owns, and what's fitted in its low slots."""
     jf_types = {t.type_id for t in db.scalars(select(TypeInfo).where(TypeInfo.group_name == JF_GROUP))}
     jf_types |= {e.entity_id for e in db.scalars(select(EntityName).where(
         EntityName.name.in_(list(RACE))))}
     ship = db.scalar(select(Asset).where(Asset.owner_type == "character",
                                          Asset.owner_id == character_id,
                                          Asset.type_id.in_(jf_types)).limit(1))
+    fit = {"economizer": 0, "ore": 0, "t2": 0}
     if ship is None:
-        return None, 0, 0, False
+        return None, fit, False
     fitted = db.execute(select(EntityName.name).join(
         Asset, Asset.type_id == EntityName.entity_id).where(
         Asset.location_id == ship.item_id, Asset.location_flag.like("LoSlot%"))).scalars().all()
-    econ = sum(1 for n in fitted if "Jump Drive Economizer" in n)
-    exp = sum(1 for n in fitted if "Expanded Cargohold" in n)
-    return ship.type_id, econ, exp, True
+    for n in fitted:
+        kind = module_kind(n)
+        if kind:
+            fit[kind] += 1
+    return ship.type_id, fit, True
 
 
 def profile(db: Session, pilot: JumpPilot, char: Character, bonus: dict[str, float]) -> Profile:
     p = Profile(char.character_id, char.name, max_collateral=pilot.max_collateral)
-    found_type, econ, exp, found = detect_ship(db, char.character_id)
+    found_type, fit, found = detect_ship(db, char.character_id)
+    p.bonus = bonus
     p.ship_type_id = pilot.ship_type_id or found_type
     if p.ship_type_id:
         p.base = _get_json(db, f"jump:ship:{p.ship_type_id}", None)
         p.ship_name = (p.base or {}).get("name") or db.scalar(select(EntityName.name).where(
             EntityName.entity_id == p.ship_type_id))
     if pilot.economizers is not None or pilot.expanders is not None:
-        p.economizers, p.expanders, p.fit_source = pilot.economizers or 0, pilot.expanders or 0, "manual"
+        # manual fit: economizers + ORE expanders (+ the rest as Expanded Cargohold IIs)
+        p.economizers, p.ore = pilot.economizers or 0, pilot.expanders or 0
+        p.t2 = max(0, LOW_SLOTS - p.economizers - p.ore) if pilot.t2_expanders is None \
+            else pilot.t2_expanders
+        p.fit_source = "manual"
     elif found:
-        p.economizers, p.expanders, p.fit_source = econ, exp, "assets"
+        p.economizers, p.ore, p.t2, p.fit_source = fit["economizer"], fit["ore"], fit["t2"], "assets"
     levels = _skill_levels(db, char.character_id)
     race = RACE.get((p.ship_name or "").split()[0], "")
     p.skills = {"Jump Drive Calibration": levels.get("Jump Drive Calibration", 0),
@@ -241,11 +283,11 @@ def profile(db: Session, pilot: JumpPilot, char: Character, bonus: dict[str, flo
         b = p.base
         p.fuel_type = b.get("fuel_type")
         p.range_ly = b["range"] * (1 + bonus["range_per_jdc"] * p.skills["Jump Drive Calibration"])
-        p.fuel_per_ly = (b["fuel"] * (1 - bonus["fuel_per_jfc"] * p.skills["Jump Fuel Conservation"])
-                         * (1 - bonus["fuel_per_jf"] * p.skills["Jump Freighters"])
-                         * (1 - bonus["economizer_fuel"]) ** p.economizers)
-        p.cargo_m3 = (b["cargo"] * (1 + bonus["cargo_per_racial"] * p.skills.get(f"{race} Freighter", 0))
-                      * (1 + bonus["expander_cargo"]) ** p.expanders)
+        p.hull_fuel = (b["fuel"] * (1 - bonus["fuel_per_jfc"] * p.skills["Jump Fuel Conservation"])
+                       * (1 - bonus["fuel_per_jf"] * p.skills["Jump Freighters"]))
+        p.hull_cargo = b["cargo"] * (1 + bonus["cargo_per_racial"] * p.skills.get(f"{race} Freighter", 0))
+        p.fuel_per_ly = p.fuel_with(p.economizers)
+        p.cargo_m3 = p.cargo_with(p.ore, p.t2)
     elif p.ship_type_id:
         p.problems.append("Ship data not loaded yet (press Refresh ship data).")
     else:
@@ -551,3 +593,370 @@ def lanes(db: Session, p: Profile | None, statuses=("outstanding", "in_progress"
         out.append(lane)
     out.sort(key=lambda ln: (-ln.per_jump, -ln.reward))
     return out
+
+
+# ------------------------------------------------------------------ module game data
+
+async def _attr_names(db: Session, ids: set[int]) -> dict[int, str]:
+    known = {int(k): v for k, v in _get_json(db, "jump:attr_names", {}).items()}
+    for i in sorted(ids - known.keys()):
+        try:
+            known[i] = (await esi.get(f"/dogma/attributes/{i}")).get("name", "")
+        except esi.EsiError:
+            known[i] = ""
+    _set_json(db, "jump:attr_names", known)
+    return known
+
+
+async def refresh_modules(db: Session) -> dict[str, str]:
+    """Read the economizer's fuel saving and volume and both expanders' cargo bonus from
+    the game data, and store them as the bonus values. Returns what was found."""
+    found: dict[str, str] = {}
+    try:
+        res = await esi.post("/universe/ids", list(MODULE_NAMES.values()))
+    except esi.EsiError:
+        return found
+    ids = {t["name"]: t["id"] for t in res.get("inventory_types", [])}
+    values = bonuses(db)
+    for kind, name in MODULE_NAMES.items():
+        tid = ids.get(name)
+        if not tid:
+            continue
+        try:
+            info = await esi.get(f"/universe/types/{tid}")
+        except esi.EsiError:
+            continue
+        attrs = {a["attribute_id"]: a["value"] for a in info.get("dogma_attributes", [])}
+        names = await _attr_names(db, set(attrs))
+        by_name = {names.get(i, ""): v for i, v in attrs.items()}
+        if kind == "economizer":
+            v = next((v for n, v in by_name.items() if "jumpDriveConsumption" in n or
+                      "JumpDriveConsumption" in n), None)
+            if v is not None and -100 < v < 0:
+                values["economizer_fuel"] = -v / 100
+                found["economizer_fuel"] = f"{-v:g}%"
+            elif v is not None and 0 < v < 1:
+                values["economizer_fuel"] = 1 - v
+                found["economizer_fuel"] = f"{(1 - v) * 100:g}%"
+            vol = info.get("packaged_volume") or info.get("volume")
+            if vol:
+                values["economizer_volume"] = vol
+                found["economizer_volume"] = f"{vol:,.0f} m³"
+        else:
+            mult = by_name.get("cargoCapacityMultiplier")
+            if mult and mult > 1:
+                key = f"{kind}_expander_cargo"
+                values[key] = mult - 1
+                found[key] = f"+{(mult - 1) * 100:g}%"
+    save_bonuses(db, values)
+    _set_json(db, "jump:module_source", found)
+    db.commit()
+    return found
+
+
+# ------------------------------------------------------------------ bulk haul ledger
+
+import re as _re  # noqa: E402
+
+_VOL_RE = _re.compile(r"([\d][\d,.\s]*)\s*m(?:3|³)\b", _re.I)
+_NUM_RE = _re.compile(r"^\d[\d,\s]*$")
+
+
+@dataclass
+class Item:
+    name: str
+    qty: int
+    unit_m3: float | None = None   # per unit; None until looked up
+
+    @property
+    def m3(self) -> float:
+        return (self.unit_m3 or 0) * self.qty
+
+
+def _num(text: str) -> float:
+    t = text.strip().replace(" ", "").replace(" ", "")
+    if "," in t and "." in t:              # 1,234.56 or 1.234,56
+        t = t.replace(",", "") if t.rfind(".") > t.rfind(",") else t.replace(".", "").replace(",", ".")
+    elif "," in t:
+        t = t.replace(",", "") if _re.search(r",\d{3}$", t) else t.replace(",", ".")
+    return float(t)
+
+
+def parse_items(text: str) -> tuple[list[Item], list[str]]:
+    """Paste from an EVE inventory window (tab separated: name, quantity, ..., volume) or
+    plain lines like `Tritanium 1,000,000` / `Tritanium x1000`. Same items are summed.
+    Returns (items, lines that couldn't be read)."""
+    items: dict[str, Item] = {}
+    bad: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        cols = [c.strip() for c in raw.split("\t")]
+        name, qty, vol = None, None, None
+        if len(cols) > 1:
+            name = cols[0]
+            for c in cols[1:]:
+                m = _VOL_RE.fullmatch(c) or (_VOL_RE.search(c) if "m3" in c.lower() or "m³" in c else None)
+                if m and vol is None:
+                    vol = _num(m.group(1))
+                elif qty is None and _NUM_RE.match(c):
+                    qty = int(_num(c))
+            qty = qty or 1            # assembled items show no quantity
+        else:
+            m = _re.match(r"^(.*?)\s+[xX×]?\s*(\d[\d,.\s]*)$", line)
+            if m:
+                name, qty = m.group(1).strip(), int(_num(m.group(2)))
+            else:
+                m = _re.match(r"^(\d[\d,.\s]*)\s*[xX×]?\s+(.+)$", line)
+                if m:
+                    name, qty = m.group(2).strip(), int(_num(m.group(1)))
+        if not name or not qty or qty < 0:
+            bad.append(raw)
+            continue
+        it = items.get(name.lower())
+        if it is None:
+            it = items[name.lower()] = Item(name, 0)
+        it.qty += qty
+        if vol is not None and qty:
+            it.unit_m3 = vol / qty if it.unit_m3 is None else it.unit_m3
+    return list(items.values()), bad
+
+
+async def fill_volumes(db: Session, items: list[Item]) -> list[str]:
+    """Look up the packaged volume per unit for items pasted without one (ESI, cached)."""
+    cache = _get_json(db, "jump:volumes", {})
+    missing = [it for it in items if it.unit_m3 is None]
+    for it in missing:
+        if it.name.lower() in cache:
+            it.unit_m3 = cache[it.name.lower()]
+    todo = [it for it in missing if it.unit_m3 is None]
+    unknown: list[str] = []
+    for start in range(0, len(todo), 500):
+        chunk = todo[start:start + 500]
+        try:
+            res = await esi.post("/universe/ids", [it.name for it in chunk])
+        except esi.EsiError:
+            unknown += [it.name for it in chunk]
+            continue
+        ids = {t["name"].lower(): t["id"] for t in res.get("inventory_types", [])}
+        for it in chunk:
+            tid = ids.get(it.name.lower())
+            if not tid:
+                unknown.append(it.name)
+                continue
+            try:
+                info = await esi.get(f"/universe/types/{tid}")
+            except esi.EsiError:
+                unknown.append(it.name)
+                continue
+            it.unit_m3 = info.get("packaged_volume") or info.get("volume") or 0
+            cache[it.name.lower()] = it.unit_m3
+    _set_json(db, "jump:volumes", cache)
+    db.commit()
+    return unknown
+
+
+@dataclass
+class Hauler:
+    profile: Profile
+    loaded_ore: int = LOW_SLOTS          # ORE expanders fitted for the loaded leg
+    return_econ: int = LOW_SLOTS          # economizers fitted for the empty leg back
+    capacity_override: float | None = None
+
+    @property
+    def loaded_econ(self) -> int:         # whatever low slots aren't ORE expanders
+        return max(0, LOW_SLOTS - self.loaded_ore)
+
+    @property
+    def carried_econ(self) -> int:        # economizers riding in the hold, for the way back
+        return max(0, self.return_econ - self.loaded_econ)
+
+    @property
+    def capacity(self) -> float:
+        if self.capacity_override:
+            return self.capacity_override
+        cargo = self.profile.cargo_with(self.loaded_ore, 0)
+        return max(0.0, cargo - self.carried_econ * self.profile.bonus.get(
+            "economizer_volume", BONUS_DEFAULTS["economizer_volume"]))
+
+    @property
+    def fuel_loaded(self) -> float:
+        return self.profile.fuel_with(self.loaded_econ)
+
+    @property
+    def fuel_empty(self) -> float:
+        return self.profile.fuel_with(self.return_econ)
+
+
+@dataclass
+class Load:
+    hauler: Hauler
+    wave: int
+    items: list[tuple[str, int, float]] = field(default_factory=list)   # name, qty, m3
+
+    @property
+    def m3(self) -> float:
+        return sum(m for _n, _q, m in self.items)
+
+    @property
+    def free(self) -> float:
+        return self.hauler.capacity - self.m3
+
+    def clip(self) -> str:
+        return "\n".join(f"{n} {q}" for n, q, _m in self.items)
+
+
+@dataclass
+class HaulPlan:
+    loads: list[Load] = field(default_factory=list)
+    too_big: list[Item] = field(default_factory=list)
+    total_m3: float = 0.0
+    routes: dict[int, Route] = field(default_factory=dict)       # per pilot
+    round_trip: bool = True
+
+    @property
+    def waves(self) -> int:
+        return max((ld.wave for ld in self.loads), default=0)
+
+    def jumps_for(self, ld: Load) -> int:
+        r = self.routes.get(ld.hauler.profile.character_id)
+        if not r or r.error:
+            return 0
+        return r.jumps * (2 if self.round_trip else 1)
+
+    def fuel_for(self, ld: Load) -> int:
+        r = self.routes.get(ld.hauler.profile.character_id)
+        if not r or r.error:
+            return 0
+        there = fuel_for(r.total_ly, ld.hauler.fuel_loaded)
+        back = fuel_for(r.total_ly, ld.hauler.fuel_empty) if self.round_trip else 0
+        return there + back
+
+    @property
+    def total_jumps(self) -> int:
+        return sum(self.jumps_for(ld) for ld in self.loads)
+
+    def fuel_by_type(self) -> dict[int, int]:
+        out: dict[int, int] = {}
+        for ld in self.loads:
+            t = ld.hauler.profile.fuel_type or 0
+            out[t] = out.get(t, 0) + self.fuel_for(ld)
+        return out
+
+
+def _last_wave(haulers: list[Hauler], remaining: float, plan: HaulPlan) -> list[Hauler]:
+    """For the final, partial wave: the fewest JFs that can carry what's left, and of
+    those the one(s) burning the least fuel."""
+    from itertools import combinations
+    best = None
+    for n in range(1, len(haulers) + 1):
+        for combo in combinations(haulers, n):
+            if sum(h.capacity for h in combo) + 1e-6 < remaining:
+                continue
+            fuel = 0
+            for h in combo:
+                r = plan.routes.get(h.profile.character_id)
+                if r and not r.error:
+                    fuel += fuel_for(r.total_ly, h.fuel_loaded) + (
+                        fuel_for(r.total_ly, h.fuel_empty) if plan.round_trip else 0)
+            key = (fuel, -sum(h.capacity for h in combo))
+            if best is None or key < best[0]:
+                best = (key, list(combo))
+        if best:
+            return sorted(best[1], key=lambda h: -h.capacity)
+    return sorted(haulers, key=lambda h: -h.capacity)
+
+
+SCRAP_M3 = 1000     # don't split a stack into a top-off smaller than this
+
+
+def plan_haul(items: list[Item], haulers: list[Hauler],
+              routes: dict[int, Route] | None = None, round_trip: bool = True) -> HaulPlan:
+    """Fewest loaded trips for the whole job: every JF hauls in parallel waves; the last
+    wave uses the fewest (then cheapest) JFs. Stacks stay whole where they fit and are
+    split only when needed."""
+    plan = HaulPlan(routes=routes or {}, round_trip=round_trip)
+    haulers = [h for h in haulers if h.capacity > 0]
+    if not haulers:
+        return plan
+    biggest = max(h.capacity for h in haulers)
+    goods = []
+    for it in items:
+        if (it.unit_m3 or 0) > biggest:
+            plan.too_big.append(it)
+        elif it.qty > 0:
+            goods.append(Item(it.name, it.qty, it.unit_m3 or 0))
+    plan.total_m3 = sum(it.m3 for it in goods)
+    remaining = plan.total_m3
+    loads: list[Load] = []
+    wave = 0
+    fleet = sum(h.capacity for h in haulers)
+    while remaining > 1e-6:
+        wave += 1
+        crew = haulers if remaining > fleet else _last_wave(haulers, remaining, plan)
+        for h in sorted(crew, key=lambda h: -h.capacity):
+            loads.append(Load(h, wave))
+        remaining -= sum(h.capacity for h in crew)
+    # Bulky-per-unit items first (kept whole where they fit), fine-grained stacks like
+    # minerals last as filler: those split cleanly into whatever space is left.
+    goods.sort(key=lambda it: (-(it.unit_m3 or 0), -it.m3))
+    for it in goods:
+        qty = it.qty
+        whole = next((ld for ld in loads if ld.free + 1e-6 >= it.unit_m3 * qty), None)
+        if whole:
+            whole.items.append((it.name, qty, it.unit_m3 * qty))
+            continue
+        # Top off part-filled holds first, but never leave a scrap (a few units
+        # topping off an almost-full hold) unless it finishes the stack.
+        for ld in sorted(loads, key=lambda ld: ld.free):
+            if qty <= 0:
+                break
+            can = int((ld.free + 1e-6) // it.unit_m3) if it.unit_m3 else qty
+            take = min(qty, can)
+            if take <= 0 or (take < qty and take * it.unit_m3 < SCRAP_M3):
+                continue
+            ld.items.append((it.name, take, it.unit_m3 * take))
+            qty -= take
+        while qty > 0:  # what didn't fit: more loads on the roomiest JF
+            h = max(haulers, key=lambda h: h.capacity)
+            wave += 1
+            extra = Load(h, wave)
+            take = min(qty, int(h.capacity // it.unit_m3) if it.unit_m3 else qty) or qty
+            extra.items.append((it.name, take, it.unit_m3 * take))
+            loads.append(extra)
+            qty -= take
+    plan.loads = [ld for ld in loads if ld.items]
+    return plan
+
+
+# ------------------------------------------------------------------ system search
+
+def _squash(s: str) -> str:
+    return "".join(ch for ch in s.lower() if ch.isalnum())
+
+
+def search_systems(db: Session, q: str, limit: int = 12) -> list[dict]:
+    """Fuzzy: exact > starts with > contains > letters in order (ignores dashes/case).
+    'ac2e' finds AC2E-3; 'jta' finds Jita."""
+    q = _squash(q)
+    if not q:
+        return []
+    scored = []
+    for s in db.scalars(select(MapSystem)):
+        n = _squash(s.name)
+        if n == q:
+            rank = 0
+        elif n.startswith(q):
+            rank = 1
+        elif q in n:
+            rank = 2
+        else:
+            it = iter(n)
+            if not all(ch in it for ch in q):
+                continue
+            rank = 3
+        scored.append((rank, len(n), s))
+    scored.sort(key=lambda x: (x[0], x[1], x[2].name))
+    return [{"name": s.name, "region": s.region_name or "", "sec": round(s.security, 1),
+             "cyno": can_cyno(s)} for _r, _l, s in scored[:limit]]

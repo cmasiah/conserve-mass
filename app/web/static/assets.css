@@ -27,8 +27,6 @@ button.star.on { color: var(--accent); }
 .scope { margin: 0 0 8px; }
 .assets-table td img, .mat-table td img { vertical-align: middle; border-radius: 3px; }
 table.assets-table, table.mat-table { overflow: visible; }
-.clip { display: inline-flex; }
-.clip-src { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
 button.copied { border-color: var(--ok); color: var(--ok); }
 .mat-lists { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-bottom: 16px; }
 .mat-list-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
