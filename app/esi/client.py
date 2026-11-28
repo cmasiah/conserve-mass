@@ -110,7 +110,8 @@ async def _send(method: str, path: str, *, token: str | None = None,
         hdrs["Authorization"] = f"Bearer {token}"
     for attempt in range(4):
         resp = await client().request(method, path, params=params, json=json, headers=hdrs)
-        usage.record(path, resp.status_code, resp.headers)
+        usage.record(path, resp.status_code, resp.headers,
+                     method=method, body=resp.text if resp.status_code >= 400 else "")
 
         # Legacy error-limit: back off before CCP bans the IP.
         remain = resp.headers.get("X-ESI-Error-Limit-Remain")

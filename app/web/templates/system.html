@@ -192,6 +192,21 @@
   </div>
 </div>
 
+{% if esi_usage.failures %}
+<div class="card esi-fails">
+  <div class="label small muted">Recent ESI errors (newest first, since the app started)</div>
+  <table class="compact small">
+    <thead><tr><th>When</th><th>Status</th><th>Feed / request</th><th>ESI said</th></tr></thead>
+    {% for f in esi_usage.failures %}
+      <tr><td class="nowrap">{{ f.at | dt }}<div class="muted">{{ f.at | delta }}</div></td>
+        <td><span class="pill small bad">{{ f.status }}</span></td>
+        <td>{{ f.family }}<div class="mono muted">{{ f.method }} {{ f.path }}</div></td>
+        <td>{{ f.message or '–' }}{% if f.hint %}<div class="muted">{{ f.hint }}</div>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
 <section class="fold" data-fold="sys-esi-keys">
 <button type="button" class="fold-head">
   <svg class="fold-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
