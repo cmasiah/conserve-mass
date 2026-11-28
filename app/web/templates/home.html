@@ -87,6 +87,14 @@
   </section>
 
   <section class="card home-card">
+    <div class="home-head"><h2>Skill queues</h2><a class="small" href="/characters?tab=queues#chars">Queues →</a></div>
+    {% for r in queue_alerts[:6] %}
+      <div class="line"><span>{{ r.character.name }}</span><span class="pill {{ r.level }} small">{{ r.state }}</span></div>
+    {% else %}<div class="small muted">{{ training | length }} queue{{ 's' if training | length != 1 }} training, none ending within a day.</div>{% endfor %}
+    {% if queue_alerts | length > 6 %}<div class="small muted">+{{ queue_alerts | length - 6 }} more on Queues</div>{% endif %}
+  </section>
+
+  <section class="card home-card">
     <div class="home-head"><h2>Stockpile</h2><a class="small" href="/industry/materials">Materials →</a></div>
     {% if not stock.stacks %}
       <div class="muted small">No assets synced yet. Turn on <strong>Assets</strong> for builders and <strong>Corp data</strong>
@@ -106,14 +114,6 @@
       {% else %}<div class="small"><span class="pill ok small">stocked</span> Everything is above its minimum.</div>{% endfor %}
       {% if stock.short | length > 6 %}<div class="small muted">+{{ stock.short | length - 6 }} more on Materials</div>{% endif %}
     {% endif %}
-  </section>
-
-  <section class="card home-card">
-    <div class="home-head"><h2>Skill queues</h2><a class="small" href="/characters?tab=queues#chars">Queues →</a></div>
-    {% for r in queue_alerts[:6] %}
-      <div class="line"><span>{{ r.character.name }}</span><span class="pill {{ r.level }} small">{{ r.state }}</span></div>
-    {% else %}<div class="small muted">{{ training | length }} queue{{ 's' if training | length != 1 }} training, none ending within a day.</div>{% endfor %}
-    {% if queue_alerts | length > 6 %}<div class="small muted">+{{ queue_alerts | length - 6 }} more on Queues</div>{% endif %}
   </section>
 </div>
 {% endblock %}
