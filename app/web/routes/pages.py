@@ -66,6 +66,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         .where(Contract.status.in_(FINISHED), Contract.type == "courier",
                Contract.date_completed >= month_ago)
     ).one()
+    # Bulk jobs earned in the last 30 days count toward delivered and revenue.
+    bulk_30 = home_svc.bulk_earnings(db, month_ago)
+    done_30d = (done_30d[0] + len(bulk_30), done_30d[1] + sum(v for _w, v in bulk_30), done_30d[2])
     corp = corps_svc.home_corp(db)
     sync = db.get(SyncState, f"corp_contracts:{corp.corporation_id}") if corp else None
     pending = db.scalar(select(func.count()).select_from(Notification)

@@ -56,7 +56,7 @@ def test_0002_survives_linked_contracts_and_failed_0_4_0_leftovers(tmp_path):
     assert db.execute("SELECT name FROM sqlite_master WHERE name LIKE '_alembic_tmp%'"
                       ).fetchall() == []
     assert db.execute("SELECT version_num FROM alembic_version").fetchone()[0] \
-        == "0015_bulk_jobs"
+        == "0016_bulk_plans"
 
 
 def test_0007_turns_tracking_on_for_existing_characters(tmp_path):

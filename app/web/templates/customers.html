@@ -42,7 +42,7 @@
       <td class="num">{{ e.hauled | isk if e.hauled else '' }}</td>
       <td class="num">{{ e.bulk_jobs or '' }}</td>
       <td class="num">{{ s.completed }}</td>
-      <td class="num">{{ s.isk_earned | isk }}</td>
+      <td class="num" title="{{ 'Couriers ' ~ (s.isk_earned | isk) ~ ' + bulk jobs ' ~ (e.bulk_earned | isk) if e.bulk_earned }}">{{ (s.isk_earned + e.bulk_earned) | isk }}</td>
       <td class="num">{{ s.total_m3 | m3 }}</td>
       <td class="num">{{ s.failed or '' }}</td>
       <td class="num muted">{{ s.withdrawn or '' }}</td>

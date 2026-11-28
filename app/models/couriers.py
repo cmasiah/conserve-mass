@@ -143,6 +143,23 @@ class ContractItem(Base):
     contract: Mapped[Contract] = relationship(back_populates="items")
 
 
+class BulkPlan(Base):
+    """A saved trip plan for a bulk job: JSON trips and steps, and which steps are done.
+    `fingerprint` is what it was planned from (contracts, destination, pilots); when the
+    job no longer matches, the plan is shown as out of date."""
+    __tablename__ = "bulk_plans"
+
+    job_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("bulk_jobs.id", ondelete="CASCADE"), primary_key=True)
+    data: Mapped[str] = mapped_column(Text)
+    done: Mapped[str] = mapped_column(Text, default="[]")
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+    job: Mapped["BulkJob"] = relationship(back_populates="plan")
+
+
 # Bulk job lifecycle (ours; ESI's item-exchange status flips to "finished" the moment the
 # corp accepts, which here means "in our hands", not delivered).
 JOB_STATUSES = ["new", "accepted", "hauling", "delivered", "closed"]
@@ -172,8 +189,16 @@ class BulkJob(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # The contract the corp issued back to the requester (spotted automatically).
+    return_contract_id: Mapped[int | None] = mapped_column(BigInteger)
+    return_type: Mapped[str | None] = mapped_column(String(16))
+    return_status: Mapped[str | None] = mapped_column(String(24))
+    return_price_isk: Mapped[float | None] = mapped_column(Float)
+    paid_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     customer: Mapped[Customer] = relationship()
+    plan: Mapped["BulkPlan | None"] = relationship(back_populates="job", uselist=False,
+                                                   cascade="all, delete-orphan")
     contracts: Mapped[list[Contract]] = relationship(back_populates="job",
                                                      order_by="Contract.date_issued")
 

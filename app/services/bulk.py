@@ -275,6 +275,66 @@ def _drop_non_hauls(db: Session, contracts: list[Contract]) -> None:
                 db.delete(job)
 
 
+# ------------------------------------------------------------------ return contracts
+
+def _dt(v):
+    from datetime import datetime
+    return datetime.fromisoformat(v.replace("Z", "+00:00")) if v else None
+
+
+def match_returns(db: Session, corp_id: int, rows: list[dict]) -> int:
+    """Spot contracts the corp issued back to a bulk job's requester (an item exchange at
+    your price, or a courier). When they complete: the job is delivered and, for an item
+    exchange, its price is what you earned. Synchronous: runs inside the contract sync's
+    short write."""
+    ours = [r for r in rows if r.get("type") in ("item_exchange", "courier")
+            and r.get("issuer_corporation_id") == corp_id and r.get("for_corporation")
+            and r.get("assignee_id")]
+    if not ours:
+        return 0
+    jobs = db.scalars(select(BulkJob).where(BulkJob.status != "closed")).all()
+    by_contract = {j.return_contract_id: j for j in jobs if j.return_contract_id}
+    matched = 0
+    for r in sorted(ours, key=lambda r: r.get("date_issued") or ""):
+        job = by_contract.get(r["contract_id"])
+        if job is None:
+            issued = _dt(r.get("date_issued"))
+            cands = [j for j in jobs if j.return_contract_id is None and j.paid_at is None
+                     and r["assignee_id"] in {j.issuer_id, getattr(j.customer, "corporation_id", None)}
+                     and issued and issued >= j.first_issued_at]
+            if not cands:
+                continue
+            job = max(cands, key=lambda j: j.first_issued_at)
+            job.return_contract_id = r["contract_id"]
+            by_contract[r["contract_id"]] = job
+        matched += 1
+        job.return_type = r["type"]
+        job.return_status = r.get("status")
+        price = r.get("price") if r["type"] == "item_exchange" else None
+        job.return_price_isk = price or None
+        if r.get("status") in FINISHED_EX and job.paid_at is None:
+            done_at = _dt(r.get("date_completed")) or utcnow()
+            job.status = "delivered"
+            job.delivered_at = job.delivered_at or done_at
+            if price:
+                job.agreed_reward_isk = price
+                job.paid_at = done_at
+            _notify_done(db, job, price)
+    return matched
+
+
+def _notify_done(db: Session, job: BulkJob, price: float | None) -> None:
+    cust = db.get(Customer, job.issuer_id)
+    if cust and cust.silenced:
+        return
+    who = cust.name if cust and cust.name else str(job.issuer_id)
+    enqueue(db, ref=f"bulkdone:{job.id}", kind="bulk_job",
+            title="💰 Bulk job paid" if price else "✅ Bulk job delivered",
+            body=f"{who} accepted the return contract." + (
+                f"\n**Earned:** {fmt_isk(price)} ISK" if price else ""),
+            url=f"{get_settings().base_url}/contracts/bulk/{job.id}", subject_id=job.issuer_id)
+
+
 # ------------------------------------------------------------------ notifications
 
 def job_line(db: Session, job: BulkJob) -> str:

@@ -1,6 +1,8 @@
 """Hauling Contracts › Bulk jobs: item-exchange haul contracts, grouped per requester."""
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+import json
+
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -9,6 +11,7 @@ from app.models import BulkJob, Contract, MapSystem
 from app.models.couriers import FINISHED_EX, JOB_STATUSES
 from app.security import require_csrf, require_user
 from app.services import bulk as svc
+from app.services import bulk_plan
 from app.services import prices
 from app.services.assets import clipboard_text, type_names
 from app.web.templating import flash, render
@@ -78,16 +81,50 @@ def bulk_job(request: Request, job_id: int, db: Session = Depends(get_db)):
     nearest = svc.nearest_hub(db, job)
     type_ids = {it.type_id for c in job.contracts for it in c.items}
     per_contract = {c.contract_id: _items(db, [c]) for c in job.contracts}
+    plan = json.loads(job.plan.data) if job.plan else None
+    done = set(json.loads(job.plan.done)) if job.plan else set()
+    trips = []
+    for t in (plan or {}).get("trips", []):
+        st = bulk_plan.steps(t)
+        trips.append({"t": t, "steps": st, "done": sum(1 for s in st if s["id"] in done),
+                      "clip": {s["id"]: clipboard_text([(i["name"], i["qty"]) for i in s["stop"]["items"]])
+                               for s in st if s["kind"] == "load"}})
+    stale = bool(job.plan and job.plan.fingerprint != bulk_plan.current_fingerprint(db, job))
+    total_steps = sum(len(x["steps"]) for x in trips)
     return render(request, "contracts_bulk_job.html", job=job, pickups=picks, items=items,
                   hubs=hub_list, nearest=nearest, per_contract=per_contract,
                   dest=db.get(MapSystem, job.dest_system_id) if job.dest_system_id else None,
                   price_source=prices.source_of(db, type_ids), statuses=JOB_STATUSES,
+                  plan=plan, trips=trips, done=done, stale=stale, total_steps=total_steps,
+                  progress=round(100 * len(done) / total_steps) if total_steps else 0,
+                  cost=bulk_plan.costs(db, job, plan) if plan else None,
+                  pricing=bulk_plan.pricing_settings(db), still_there=_still_there(db, job, picks),
                   clip=clipboard_text([(i["name"], i["qty"]) for i in items]),
                   clip_by_contract={cid: clipboard_text([(i["name"], i["qty"]) for i in rows])
                                     for cid, rows in per_contract.items()},
                   now=utcnow(), open_jobs=open_job_count(db), new_jobs=new_job_count(db),
                   waiting_jobs=waiting_job_count(db),
                   FINISHED_EX=FINISHED_EX)
+
+
+def _still_there(db: Session, job: BulkJob, picks) -> dict[int, dict]:
+    """Per pickup system: the job's goods still sitting at its pickup structures, from the
+    corp's synced assets (count of items and m3)."""
+    from app.models import Asset
+    from app.services.jump import _get_json
+    vols = {int(k): v for k, v in _get_json(db, bulk_plan.VOLUMES_KEY, {}).items()}
+    types = {it.type_id for c in job.live for it in c.items}
+    out = {}
+    for p in picks:
+        if not p.system or not p.location_ids or not types:
+            continue
+        rows = db.execute(select(Asset.type_id, func.sum(Asset.quantity)).where(
+            Asset.site_id.in_(p.location_ids), Asset.type_id.in_(types)).group_by(Asset.type_id)).all()
+        qty = sum(int(q or 0) for _t, q in rows)
+        m3 = sum((vols.get(t, 0) or 0) * int(q or 0) for t, q in rows)
+        accepted = any(c.status in FINISHED_EX for c in p.contracts)
+        out[p.system.system_id] = {"qty": qty, "m3": m3, "cleared": accepted and qty == 0}
+    return out
 
 
 def _isk(text: str) -> float | None:
@@ -126,3 +163,69 @@ def bulk_update(request: Request, job_id: int, csrf: str = Form(""), status: str
     db.commit()
     flash(request, "Job saved.")
     return RedirectResponse(f"/contracts/bulk/{job_id}", status_code=303)
+
+
+def _fetch(request: Request) -> bool:
+    return request.headers.get("x-requested-with") == "fetch"
+
+
+@router.post("/contracts/bulk/{job_id}/plan")
+async def bulk_plan_now(request: Request, job_id: int, csrf: str = Form("")):
+    """Plan (or re-plan) the job's trips. Started trips are kept."""
+    require_csrf(request, csrf)
+    from app.services.jump import ISOTOPES
+    await prices.ensure(set(ISOTOPES))
+    result = await bulk_plan.make_plan(job_id)
+    if result.get("error"):
+        flash(request, result["error"], "error")
+    else:
+        t = result["totals"]
+        msg = f"Planned {t['trips']} trip{'s' if t['trips'] != 1 else ''} in {t['waves']} wave{'s' if t['waves'] != 1 else ''}, {t['jumps']} jumps."
+        if result.get("unreachable"):
+            msg += f" Can't reach: {', '.join(result['unreachable'])}."
+        if result.get("too_big"):
+            msg += f" Too big for any hold: {', '.join(result['too_big'])}."
+        flash(request, msg)
+    return RedirectResponse(f"/contracts/bulk/{job_id}#plan", status_code=303)
+
+
+@router.post("/contracts/bulk/{job_id}/step")
+def bulk_step(request: Request, job_id: int, csrf: str = Form(""), step: str = Form(""),
+              done: int = Form(1), db: Session = Depends(get_db)):
+    """Tick (or untick) one step of the saved plan."""
+    require_csrf(request, csrf)
+    job = db.get(BulkJob, job_id)
+    if job is None or job.plan is None:
+        raise HTTPException(404)
+    ids = set(json.loads(job.plan.done))
+    (ids.add if done else ids.discard)(step)
+    job.plan.done = json.dumps(sorted(ids))
+    job.plan.updated_at = utcnow()
+    if ids and job.status in ("new", "accepted"):
+        job.status = "hauling"
+    db.commit()
+    if _fetch(request):
+        return JSONResponse({"ok": True, "done": len(ids)})
+    return RedirectResponse(f"/contracts/bulk/{job_id}#plan", status_code=303)
+
+
+@router.post("/contracts/bulk/{job_id}/pricing")
+def bulk_pricing(request: Request, job_id: int, csrf: str = Form(""), isk_per_jump: str = Form(""),
+                 risk_pct: str = Form(""), use: str = Form(""), db: Session = Depends(get_db)):
+    """Save the pricing defaults (ISK per jump, risk %), or take a suggested reward."""
+    require_csrf(request, csrf)
+    job = db.get(BulkJob, job_id)
+    if job is None:
+        raise HTTPException(404)
+    if use:
+        job.agreed_reward_isk = _isk(use)
+        flash(request, "Reward set. Contract it back for that, and the app will spot it.")
+    else:
+        try:
+            risk = float((risk_pct or "0").replace("%", "") or 0)
+        except ValueError:
+            risk = 0.0
+        bulk_plan.save_pricing(db, _isk(isk_per_jump) or 0.0, risk)
+        flash(request, "Pricing defaults saved (they apply to every job).")
+    db.commit()
+    return RedirectResponse(f"/contracts/bulk/{job_id}#pricing", status_code=303)

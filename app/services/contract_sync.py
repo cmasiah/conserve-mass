@@ -348,6 +348,8 @@ async def sync_corporation_contracts() -> None:
                 names = await _prefetch(db, corp_id, rows, token)
 
                 results = store_batch(db, corp_id, rows, names)
+                from app.services import bulk
+                bulk.match_returns(db, corp_id, res.data)
                 state = db.get(SyncState, key)
                 state.etag, state.expires_at = etag, expires
                 log.info("Contracts synced: %d rows (couriers + bulk), %d new, %d changed",

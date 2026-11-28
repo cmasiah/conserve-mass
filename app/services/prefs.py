@@ -34,9 +34,10 @@ KINDS: list[Kind] = [
     Kind("status_cancelled", "Contract cancelled by issuer", "", "Hauling"),
     Kind("status_deleted", "Contract deleted by issuer", "", "Hauling"),
     Kind("status_rejected", "Contract rejected", "", "Hauling"),
-    Kind("bulk_job", "Bulk job assigned",
+    Kind("bulk_job", "Bulk job assigned, paid or delivered",
          "Item-exchange haul contracts assigned to the corp: one message per job (and once "
-         "more if it grows), with m³, pickups, value and whether it's paid upfront.",
+         "more if it grows), with m³, pickups, value and whether it's paid upfront; and "
+         "when the requester accepts your return contract.",
          "Hauling", default=False),
     Kind("bulk_expiring", "Bulk job contracts expiring soon",
          "Some of a bulk job's contracts are still unaccepted and expire within the "
