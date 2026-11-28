@@ -14,11 +14,13 @@ def db():
     from app.db import Base, SessionLocal, engine
     from app.models import Corporation
 
+    from app.services import prefs
+    prefs.invalidate()
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     session = SessionLocal()
     session.add(Corporation(corporation_id=98000001, name="Conserve Mass", ticker="CMASS",
-                            is_tracked=True))
+                            is_tracked=True, is_home=True))
     session.commit()
     yield session
     session.close()

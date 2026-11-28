@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% from "partials/sync.html" import sync_now %}
+{% block title %}Slots · {{ APP_NAME }}{% endblock %}
+{% macro pips(level, queued=0) -%}
+  <span class="pips" aria-label="level {{ level }}{{ ', training to ' ~ queued if queued > level }}">{% for i in range(5) %}<i class="{{ 'on' if i < level else ('q' if i < queued) }}"></i>{% endfor %}</span>
+{%- endmacro %}
+{% macro slotcell(r, cat) -%}
+  {%- if not r.has_skills -%}<span class="muted small">no skill data</span>
+  {%- else -%}
+    {%- set d = detail[r.character.character_id][cat] -%}
+    {%- set cap = d.capacity -%}{%- set used = r.used.get(cat, 0) -%}
+    <div class="tip slotcell {{ 'short' if 0 < cap < gold }}" tabindex="0">
+      {% if cap %}
+        <div class="nums"><strong>{{ used }}</strong><span class="muted cap-n"> / {{ cap }}</span>
+          <span class="small muted">in use</span></div>
+        <div class="meter {{ 'full' if used >= cap }}"><span style="width: {{ (used / cap * 100) | round(0) }}%"></span></div>
+      {% else %}
+        <div class="nums muted">—</div>
+      {% endif %}
+      <div class="tip-body">
+        <div class="tip-head">{{ labels[cat] }} · {{ cap }} slot{{ 's' if cap != 1 }}{% if cat == 'reactions' and not cap %} (needs Reactions){% endif %}</div>
+        {% for s in d.rows %}
+          <div class="tip-row"><span>{{ s.name }}</span>{{ pips(s.level, s.queued) }}<span class="tip-note">{{ s.note }}</span></div>
+        {% endfor %}
+        <div class="tip-row tip-remote"><span>{{ d.remote.name }}</span>{{ pips(d.remote.level, d.remote.queued) }}<span class="tip-note">{{ d.remote.reach }}</span></div>
+        <div class="tip-legend"><span><span class="pips"><i class="on"></i></span>trained</span><span><span class="pips"><i class="q"></i></span>in skill queue</span></div>
+      </div>
+    </div>
+  {%- endif -%}
+{%- endmacro %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Slots</h1>
+  <span class="spacer"></span>
+  {% if missing %}
+  <span class="tip" tabindex="0">
+    <a class="pill warn" href="/characters/onboard/start?profile=personal">{{ missing | length }} character{{ 's' if missing | length != 1 }} need{{ 's' if missing | length == 1 }} re-linking</a>
+    <span class="tip-body tip-left">
+      <span class="tip-head">Re-link while logged in as each character in-game</span>
+      {% for c, scopes in missing %}<span class="tip-row"><span>{{ c.name }}</span><span class="tip-note">missing {{ scopes | length }} scope{{ 's' if scopes | length != 1 }}</span></span>{% endfor %}
+    </span>
+  </span>
+  {% endif %}
+  {{ sync_now(sync_feeds, "/industry/sync-now", csrf, now, back="/industry/slots") }}
+</div>
+
+<div class="grid cmd">
+  <div class="card stat"><div class="label">Characters tracked</div>
+    <div class="value">{{ tracked }}</div>
+    <div class="small muted">{{ synced }} with skills synced · {{ capital_builders }} capital builder{{ 's' if capital_builders != 1 }}</div></div>
+  {% for c in cats %}{% set t = totals[c] %}
+  <a class="card stat link" href="?sort={{ c }}"><div class="label">{{ labels[c] }} free</div>
+    <div class="value">{{ t.free }}<span class="small muted"> / {{ t.cap }}</span></div>
+    <div class="meter {{ 'full' if t.cap and t.used >= t.cap }}" style="margin-top:6px"><span style="width: {{ ((t.used / t.cap * 100) if t.cap else 0) | round(0) }}%"></span></div>
+    <div class="small muted">{{ t.used }} in use</div></a>
+  {% endfor %}
+</div>
+
+<div class="toolbar" style="margin-top:16px">
+  {%- set ds = 'desc' if desc else 'asc' -%}
+  <div class="tabs slot-filters">
+    <a href="?sort={{ sort }}&dir={{ ds }}" class="{{ 'active' if not only }}">All</a>
+    <span class="tab-box">
+      <span class="tab-group">{{ gold }}+ slots</span>
+      {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=gold:{{ c }}" class="{{ 'active' if only == 'gold:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ gold_counts[c] }}</span></a>{% endfor %}
+    </span>
+    <span class="tab-box short-box">
+      <span class="tab-group">Under {{ gold }}</span>
+      {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=under:{{ c }}" class="{{ 'active' if only == 'under:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ under_counts[c] }}</span></a>{% endfor %}
+    </span>
+    <span class="tab-box">
+      <a href="?sort={{ sort }}&dir={{ ds }}&only=capital" class="{{ 'active' if only == 'capital' }}">Capital builders</a>
+    </span>
+  </div>
+  <span class="spacer"></span>
+  <span class="small muted">Hover a slot count for the skills behind it.</span>
+</div>
+
+{% if rows %}
+<table class="slots-table">
+  <thead><tr>
+    {%- macro sorth(key, label) -%}
+      {%- set active = sort == key -%}
+      {%- set next = ('asc' if desc else 'desc') if active else ('asc' if key == 'name' else 'desc') -%}
+      <th class="{{ 'sorted' if active }}"><a href="?sort={{ key }}&dir={{ next }}&only={{ only }}">{{ label }}
+        <span class="sort-arrow">{{ ('▼' if desc else '▲') if active else '↕' }}</span></a></th>
+    {%- endmacro %}
+    {{ sorth('name', 'Character') }}
+    {{ sorth('manufacturing', 'Manufacturing') }}
+    {{ sorth('science', 'Research') }}
+    {{ sorth('reactions', 'Reactions') }}
+    {{ sorth('capital', 'Capital Construction') }}
+    <th>Synced</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td><img src="https://images.evetech.net/characters/{{ r.character.character_id }}/portrait?size=32" width="24" height="24" style="border-radius:50%;vertical-align:middle" alt="">
+        {{ r.character.name }}</td>
+      <td>{{ slotcell(r, 'manufacturing') }}</td>
+      <td>{{ slotcell(r, 'science') }}</td>
+      <td>{{ slotcell(r, 'reactions') }}</td>
+      <td>{% if r.has_skills %}
+            {%- set capq = r.queued.get('Capital Ship Construction', 0) %}
+            <span class="tip capcell" tabindex="0">
+              {{ pips(r.capital_level, capq) }}
+              {% if r.capital_level %}<span class="tier tier-{{ r.capital_level }}">{{ r.capital_label }}</span>
+              {% else %}<span class="muted small">not trained</span>{% endif %}
+              {% if capq > r.capital_level %}<span class="small q-note">→ {{ capq }}</span>{% endif %}
+              <span class="tip-body tip-left">
+                <span class="tip-head">Capital Ship Construction</span>
+                <span class="tip-row"><span>Current level</span>{{ pips(r.capital_level, capq) }}<span class="tip-note">{{ 'training to ' ~ capq if capq > r.capital_level else '' }}</span></span>
+                {% for lvl, lvl_label, tier_name in tier_rows %}
+                  <span class="tip-row {{ 'tip-done' if r.capital_level >= lvl else 'muted' }}"><span>{{ lvl_label }}</span><span></span><span class="tip-note"><span class="tier tier-{{ lvl }}">{{ tier_name }}</span></span></span>
+                {% endfor %}
+              </span>
+            </span>
+          {% else %}<span class="muted small">no skill data</span>{% endif %}</td>
+      <td class="small muted">{{ r.skills_updated | delta(now) if r.skills_updated else '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<div class="card empty">No characters match.</div>{% endif %}
+{% endblock %}

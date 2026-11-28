@@ -5,31 +5,156 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {% block head %}{% endblock %}
   <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css">
-  <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/app.css?v={{ ASSET_V }}">
+  <link rel="icon" type="image/png" href="/static/favicon.png?v={{ ASSET_V }}">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v={{ ASSET_V }}">
 </head>
-<body>
+<body class="{{ 'with-nav' if user }}">
 {% if user %}
-<header class="top">
-  <div class="brand">Conserve Mass <small>ops</small></div>
-  <nav>
-    {% set p = request.url.path %}
-    <a href="/" class="{{ 'active' if p == '/' }}">Dashboard</a>
-    <a href="/contracts" class="{{ 'active' if p.startswith('/contracts') }}">Contracts</a>
-    <a href="/customers" class="{{ 'active' if p.startswith('/customers') }}">Customers</a>
-    <a href="/characters" class="{{ 'active' if p.startswith('/characters') }}">Characters</a>
-    <a href="/system" class="{{ 'active' if p.startswith('/system') }}">System{% if version_info().update_available %} <span class="pill warn small" title="Version {{ version_info().latest }} available">update</span>{% endif %}</a>
-    <a href="/logs" class="{{ 'active' if p.startswith('/logs') }}">Logs</a>
+{% set p = request.url.path %}
+{% set ICONS = {
+  'home': '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/>',
+  'dashboard': '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  'contracts': '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13h7M9 17h7"/>',
+  'customers': '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5"/><circle cx="17.5" cy="9" r="2.5"/><path d="M16 14.6c2.6.1 4.7 1.9 5.4 5.4"/>',
+  'slots': '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  'jobs': '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
+  'blueprints': '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  'jump': '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><path d="M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
+  'assets': '<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/>',
+  'materials': '<path d="M5 20h14"/><path d="M7 20v-6h4v6M13 20V8h4v12"/><path d="M7 11l2-3 2 3"/>',
+  'characters': '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.5 4.2-7 8-7s7 2.5 8 7"/>',
+  'notifications': '<path d="M6 16V11a6 6 0 0112 0v5l2 2H4z"/><path d="M10 20a2 2 0 004 0"/>',
+  'system': '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+  'logs': '<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
+  'hauling': '<path d="M3 7h11v9H3z"/><path d="M14 10h4l3 3v3h-7"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>',
+  'industry': '<path d="M3 20V10l5 3V10l5 3V6l8 4v10z"/><path d="M7 17h2M12 17h2M17 17h2"/>',
+  'admin': '<circle cx="12" cy="12" r="3"/><path d="M12 3l2 2.2 3-.6.6 3L20 10l-1 2.6 1 2.6-2.4 1.4-.6 3-3-.6L12 21l-2-2-3 .6-.6-3L4 15.2 5 12.6 4 10l2.4-1.4.6-3 3 .6z"/>',
+  'chev': '<path d="M9 6l6 6-6 6"/>',
+  'fold': '<path d="M15 6l-6 6 6 6"/><path d="M20 6l-6 6 6 6" opacity=".45"/>'
+} %}
+{% macro item(href, label, icon, active, badge='') -%}
+  <a href="{{ href }}" class="nav-item{{ ' active' if active }}" title="{{ label }}">
+    <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS[icon] | safe }}</svg>
+    <span class="nav-label">{{ label }}</span>{{ badge | safe }}
+  </a>
+{%- endmacro %}
+{% macro section(key, label, icon, open) -%}
+  <div class="nav-sec{{ ' open' if open }}" data-sec="{{ key }}" data-has-active="{{ 1 if open else 0 }}">
+    <button type="button" class="nav-group" aria-expanded="{{ 'true' if open else 'false' }}" title="{{ label }}">
+      <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS[icon] | safe }}</svg>
+      <span class="nav-label">{{ label }}</span>
+      <svg class="nav-chev" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS['chev'] | safe }}</svg>
+    </button>
+    <div class="nav-sub"><div class="nav-sub-inner">{{ caller() }}</div></div>
+  </div>
+{%- endmacro %}
+<aside class="side">
+  <a href="/" class="brand-block">
+    <img src="/static/icon.png?v={{ ASSET_V }}" alt="" width="40" height="40" class="brand-icon">
+    <span class="brand">Conserve Mass<small>ops</small></span>
+  </a>
+
+  <div class="nav-wrap">
+  <button type="button" class="nav-more up" data-dir="-1" tabindex="-1" aria-hidden="true" title="More above">
+    <svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button>
+  <nav id="side-nav">
+    {{ item('/', 'Home', 'home', p == '/') }}
+
+    {% set in_hauling = p == '/hauling' or p.startswith('/contracts') or p.startswith('/customers') or p.startswith('/jump') %}
+    {% call section('hauling', 'Hauling Services', 'hauling', in_hauling) %}
+      {{ item('/hauling', 'Dashboard', 'dashboard', p == '/hauling') }}
+      {{ item('/contracts', 'Contracts', 'contracts', p.startswith('/contracts')) }}
+      {{ item('/customers', 'Customers', 'customers', p.startswith('/customers')) }}
+      {{ item('/jump', 'Jump Planner', 'jump', p.startswith('/jump')) }}
+    {% endcall %}
+
+    {% call section('industry', 'Industry', 'industry', p.startswith('/industry')) %}
+      {{ item('/industry/slots', 'Slots', 'slots', p.startswith('/industry/slots')) }}
+      {{ item('/industry/jobs', 'Jobs', 'jobs', p.startswith('/industry/jobs')) }}
+      {{ item('/industry/blueprints', 'Blueprints', 'blueprints', p.startswith('/industry/blueprints')) }}
+      {{ item('/industry/assets', 'Assets', 'assets', p.startswith('/industry/assets')) }}
+      {{ item('/industry/materials', 'Materials', 'materials', p.startswith('/industry/materials')) }}
+    {% endcall %}
+
+    {# named nav_update so it can't shadow page variables such as `upd` on the System page #}
+    {% set nav_update = version_info().update_available %}
+    {% call section('admin', 'Admin', 'admin', p.startswith('/characters') or p.startswith('/settings') or p.startswith('/system') or p.startswith('/logs')) %}
+      {{ item('/characters', 'Characters', 'characters', p.startswith('/characters')) }}
+      {{ item('/settings/notifications', 'Notifications', 'notifications', p.startswith('/settings')) }}
+      {{ item('/system', 'System', 'system', p.startswith('/system'),
+              ' <span class="nav-badge">update</span>' if nav_update else '') }}
+      {{ item('/logs', 'Logs', 'logs', p.startswith('/logs')) }}
+    {% endcall %}
   </nav>
+  <button type="button" class="nav-more down" data-dir="1" tabindex="-1" aria-hidden="true" title="More below">
+    <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+  </div>
+
+  <button type="button" class="nav-fold" id="nav-fold" title="Collapse menu" aria-label="Collapse menu">
+    <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS['fold'] | safe }}</svg>
+    <span class="nav-label">Collapse</span>
+  </button>
+
   <div class="who">
     <img src="https://images.evetech.net/characters/{{ user.character_id }}/portrait?size=64" alt="">
-    {{ user.name }}
+    <span class="who-name">{{ user.name }}</span>
     <form class="inline" method="post" action="/logout">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="small">Log out</button>
+      <button class="small" title="Log out">⎋</button>
     </form>
   </div>
-</header>
+</aside>
+<script>
+/* Sidebar: sections fold open/closed without leaving the page; the whole menu can
+   shrink to an icon strip. Choices are remembered in this browser. */
+(() => {
+  const KEY = 'cmass.nav';
+  let st = {};
+  try { st = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) {}
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {} };
+  const body = document.body;
+  if (st.mini) body.classList.add('nav-mini');
+
+  document.querySelectorAll('.nav-sec').forEach(sec => {
+    const key = sec.dataset.sec, btn = sec.querySelector('.nav-group');
+    const setOpen = open => { sec.classList.toggle('open', open); btn.setAttribute('aria-expanded', open); };
+    // The section holding the current page is always open; others remember their state.
+    if (sec.dataset.hasActive !== '1' && st.open && key in st.open) setOpen(st.open[key]);
+    btn.addEventListener('click', () => {
+      if (body.classList.contains('nav-mini')) {          // in icon mode, expand the menu first
+        body.classList.remove('nav-mini'); st.mini = false; setOpen(true);
+      } else {
+        setOpen(!sec.classList.contains('open'));
+      }
+      st.open = st.open || {}; st.open[key] = sec.classList.contains('open'); save();
+    });
+  });
+  document.getElementById('nav-fold').addEventListener('click', () => {
+    st.mini = body.classList.toggle('nav-mini'); save();
+  });
+  requestAnimationFrame(() => body.classList.add('nav-ready'));  // no animation on first paint
+
+  // When the menu is taller than the window, show which edge has items scrolled out of
+  // view (a fade + arrow), so nothing looks like it's simply missing.
+  const nav = document.getElementById('side-nav'), wrap = nav.parentElement;
+  const edges = () => {
+    const below = nav.scrollHeight - nav.clientHeight - nav.scrollTop;
+    wrap.classList.toggle('more-up', nav.scrollTop > 2);
+    wrap.classList.toggle('more-down', below > 2);
+  };
+  nav.addEventListener('scroll', edges, { passive: true });
+  window.addEventListener('resize', edges);
+  nav.addEventListener('transitionend', edges);    // sections finishing their fold animation
+  document.querySelectorAll('.nav-group, #nav-fold').forEach(b => b.addEventListener('click', () => setTimeout(edges, 260)));
+  wrap.querySelectorAll('.nav-more').forEach(b => b.addEventListener('click', () =>
+    nav.scrollBy({ top: b.dataset.dir * nav.clientHeight * 0.7, behavior: 'smooth' })));
+  // Keep the current page's link in view on load.
+  const act = nav.querySelector('.nav-item.active');
+  if (act && nav.scrollHeight > nav.clientHeight) act.scrollIntoView({ block: 'nearest' });
+  edges();
+})();
+</script>
 {% endif %}
 <main>
   {% if flash %}<div class="flash {{ flash.level }}">{{ flash.msg }}</div>{% endif %}

@@ -11,8 +11,8 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db import utcnow
-from app.esi import sso
+from app.db import release_write_lock, utcnow
+from app.esi import sso, usage
 from app.models import EsiToken, SyncState
 from app.security import decrypt, encrypt
 
@@ -103,11 +103,16 @@ async def _respect_rate_limit(resp: httpx.Response) -> None:
 async def _send(method: str, path: str, *, token: str | None = None,
                 params: dict | None = None, json: Any = None,
                 headers: dict | None = None) -> httpx.Response:
+    # Never sit on the SQLite write lock while waiting for CCP (see app/db.py).
+    release_write_lock(f"ESI {path}")
     hdrs = dict(headers or {})
     if token:
         hdrs["Authorization"] = f"Bearer {token}"
     for attempt in range(4):
         resp = await client().request(method, path, params=params, json=json, headers=hdrs)
+        usage.record(path, resp.status_code, resp.headers, method=method,
+                     body=resp.text if resp.status_code >= 400 else "",
+                     who=usage.who_from_token(token))
 
         # Legacy error-limit: back off before CCP bans the IP.
         remain = resp.headers.get("X-ESI-Error-Limit-Remain")
@@ -146,9 +151,10 @@ async def post(path: str, json: Any, *, token: str | None = None) -> Any:
     return resp.json()
 
 
-async def get_cached_paged(db: Session, key: str, path: str, *, token: str | None = None
-                           ) -> EsiResult:
-    """GET a (possibly paginated) list, honouring Expires and ETag via sync_state.
+async def get_cached_paged(db: Session, key: str, path: str, *, token: str | None = None,
+                           params: dict | None = None, paged: bool = True) -> EsiResult:
+    """GET a (possibly paginated) list -- or, with paged=False, a single object --
+    honouring Expires and ETag via sync_state.
 
     Returns not_modified=True if ESI says nothing changed (or cache hasn't expired).
     """
@@ -161,7 +167,9 @@ async def get_cached_paged(db: Session, key: str, path: str, *, token: str | Non
         return EsiResult(data=None, not_modified=True, expires_at=state.expires_at)
 
     headers = {"If-None-Match": state.etag} if state.etag else None
-    resp = await _send("GET", path, token=token, params={"page": 1}, headers=headers)
+    base_params = dict(params or {})
+    first = {**base_params, "page": 1} if paged else base_params
+    resp = await _send("GET", path, token=token, params=first, headers=headers)
 
     if resp.status_code == 304:
         state.expires_at = _parse_expires(resp)
@@ -172,10 +180,17 @@ async def get_cached_paged(db: Session, key: str, path: str, *, token: str | Non
         state.last_error = f"{resp.status_code}: {resp.text[:300]}"
         raise EsiError(resp.status_code, resp.text[:300])
 
+    if not paged:
+        state.etag = resp.headers.get("ETag")
+        state.expires_at = _parse_expires(resp)
+        state.last_success_at = now
+        state.last_error = None
+        return EsiResult(data=resp.json(), not_modified=False, expires_at=state.expires_at)
+
     data = list(resp.json())
     pages = int(resp.headers.get("X-Pages", "1"))
     for page in range(2, pages + 1):
-        r = await _send("GET", path, token=token, params={"page": page})
+        r = await _send("GET", path, token=token, params={**base_params, "page": page})
         if r.status_code != 200:
             state.last_error = f"page {page}: {r.status_code}"
             raise EsiError(r.status_code, r.text[:300])
@@ -201,6 +216,7 @@ async def access_token(db: Session, character_id: int) -> str:
         raise NoValidToken(f"No valid ESI token for character {character_id}")
 
     lock = _refresh_locks.setdefault(character_id, asyncio.Lock())
+    release_write_lock("token refresh lock")  # the lock holder may need to write
     async with lock:
         db.refresh(tok)
         if (tok.access_token_enc and tok.access_expires_at

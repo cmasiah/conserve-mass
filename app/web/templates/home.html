@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block head %}<meta http-equiv="refresh" content="120">
+<link rel="stylesheet" href="/static/home.css?v={{ ASSET_V }}">{% endblock %}
+{% block title %}Home · {{ APP_NAME }}{% endblock %}
+{% block content %}
+{%- set training = queues | selectattr('level', 'equalto', 'ok') | list -%}
+{%- set queue_alerts = queues | rejectattr('level', 'equalto', 'ok') | list -%}
+
+<section class="hero" style="background-image: url('/static/banner.jpg?v={{ ASSET_V }}')" role="img"
+         aria-label="Conserve Mass: a jump freighter leaving a cyno">
+  <div class="hero-strip">
+    <span>Welcome back, <strong>{{ user.name }}</strong></span>
+    <span class="spacer"></span>
+    <span class="small">{{ now | dt }}</span>
+  </div>
+</section>
+
+{% if attention %}
+<div class="attn-row">
+  {% for a in attention %}
+    <a class="attn {{ a.level }}" href="{{ a.href }}"><span class="dot"></span>{{ a.text }}</a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="attn-row"><span class="attn ok"><span class="dot"></span>All systems normal</span></div>
+{% endif %}
+
+<div class="kpis">
+  <a class="kpi" href="/contracts?status=outstanding"><span class="kpi-v">{{ hauling.outstanding }}</span>
+    <span class="kpi-l">awaiting pickup</span>{% if hauling.expiring_24h %}<span class="kpi-s warn-text">{{ hauling.expiring_24h }} expire &lt;24h</span>{% endif %}</a>
+  <a class="kpi" href="/contracts?status=in_progress"><span class="kpi-v">{{ hauling.in_transit }}</span>
+    <span class="kpi-l">in transit</span><span class="kpi-s">{{ hauling.collateral_at_risk | isk }} collateral</span></a>
+  <a class="kpi" href="/hauling"><span class="kpi-v">{{ hauling.reward_30d | isk }}</span>
+    <span class="kpi-l">earned · 30 days</span><span class="kpi-s">{{ hauling.delivered_30d }} delivered</span></a>
+  <a class="kpi" href="/industry/slots"><span class="kpi-v">{{ industry.free.manufacturing }}<small>/{{ industry.total.manufacturing }}</small></span>
+    <span class="kpi-l">mfg slots free</span><span class="kpi-s">{{ industry.free.science }} sci · {{ industry.free.reactions }} react free</span></a>
+  <a class="kpi" href="/industry/jobs"><span class="kpi-v">{{ industry.ready_jobs }}</span>
+    <span class="kpi-l">jobs ready</span><span class="kpi-s">{{ industry.active_jobs }} running{% if industry.next_end %} · next {{ industry.next_end | delta(now) }}{% endif %}</span></a>
+  <a class="kpi" href="/industry/materials"><span class="kpi-v {{ 'warn-text' if stock.short }}">{{ stock.short | length }}</span>
+    <span class="kpi-l">materials below min</span><span class="kpi-s">{{ stock.excess }} above max · {{ stock.watched_places }} watched</span></a>
+  <a class="kpi" href="/characters"><span class="kpi-v">{{ linked }}</span>
+    <span class="kpi-l">characters</span><span class="kpi-s">{{ training | length }} training{% if queue_alerts %} · <span class="warn-text">{{ queue_alerts | length }} idle</span>{% endif %}</span></a>
+</div>
+
+<div class="home-grid">
+  <section class="card home-card">
+    <div class="home-head"><h2>Hauling</h2><a class="small" href="/hauling">Dashboard →</a></div>
+    <div class="weekbars compact-bars" role="img" aria-label="Courier reward delivered per week, last 8 weeks">
+      {% for w in isk_weeks %}
+      <div class="wb" title="Week of {{ w.start.strftime('%b %d') }}: {{ w.isk | isk }} from {{ w.count }} contract(s)">
+        <span class="wb-track"><span class="wb-bar" style="height: {{ [w.pct, 2] | max }}%"></span></span>
+        <span class="wb-lbl small muted">{{ w.start.strftime('%d') }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="sub">Next deadlines</div>
+    {% for d in deadlines %}
+      <a class="line" href="/contracts/{{ d.c.contract_id }}">
+        <span>{{ d.c.customer.name if d.c.customer and d.c.customer.name else d.c.issuer_id }}
+          <span class="muted small">{{ 'deliver' if d.kind == 'deliver' else 'accept' }}</span></span>
+        <span class="{{ 'pill ' ~ d.level ~ ' small' if d.level else 'small' }}">{{ d.at | delta(now) }}</span></a>
+    {% else %}<div class="muted small">No open contracts.</div>{% endfor %}
+    {% if top_customers %}
+      <div class="sub">Top customers this month</div>
+      {% for t in top_customers[:3] %}
+        <a class="line" href="/customers/{{ t.id }}"><span>{{ t.name }}</span><span class="small muted">{{ t.isk | isk }}</span></a>
+      {% endfor %}
+    {% endif %}
+  </section>
+
+  <section class="card home-card">
+    <div class="home-head"><h2>Industry</h2><a class="small" href="/industry/jobs">Jobs →</a></div>
+    <div class="sub">Finishing in the next 24h</div>
+    {% for j in jobs_24h %}
+      <div class="line">
+        <span>{{ j.what }}{% if j.runs > 1 %} <span class="small muted">×{{ j.runs }}</span>{% endif %}
+          <span class="muted small">· {{ j.who }}</span></span>
+        <span class="job-end"><span class="meter"><span style="width: {{ j.pct }}%"></span></span>
+          <span class="small">{{ j.end | delta(now) }}</span></span>
+      </div>
+    {% else %}<div class="muted small">Nothing finishes in the next 24 hours.</div>{% endfor %}
+    <div class="sub">Free slots <a class="small" href="/industry/slots">Slots →</a></div>
+    {% for r in idle[:5] %}
+      <div class="line"><span>{{ r.character.name }}{% if r.idle %} <span class="pill warn small">idle</span>{% endif %}</span>
+        <span class="small muted">{{ r.free.manufacturing }} mfg · {{ r.free.science }} sci · {{ r.free.reactions }} react</span></div>
+    {% else %}<div class="muted small">Every slot is busy.</div>{% endfor %}
+  </section>
+
+  <section class="card home-card">
+    <div class="home-head"><h2>Stockpile</h2><a class="small" href="/industry/materials">Materials →</a></div>
+    {% if not stock.stacks %}
+      <div class="muted small">No assets synced yet. Turn on <strong>Assets</strong> for builders and <strong>Corp data</strong>
+        for your corp on <a href="/characters">Characters</a>.</div>
+    {% elif not stock.watched_places %}
+      <div class="muted small">{{ '{:,}'.format(stock.stacks) }} stacks tracked. Star your hubs on
+        <a href="/industry/assets">Assets</a> to total them here.</div>
+    {% elif not stock.targets %}
+      <div class="muted small">Watching {{ stock.watched_places }} place{{ 's' if stock.watched_places != 1 }}. Set min/max on
+        <a href="/industry/materials">Materials</a> to get a shopping list here.</div>
+    {% else %}
+      <div class="sub">Shopping list</div>
+      {% for name, n, lo in stock.short[:6] %}
+        <div class="line"><span>{{ name }}</span><span class="small">
+          <span class="meter short-meter"><span style="width: {{ ((lo - n) / lo * 100) | round(0) if lo else 0 }}%"></span></span>
+          buy {{ '{:,}'.format(n) }}</span></div>
+      {% else %}<div class="small"><span class="pill ok small">stocked</span> Everything is above its minimum.</div>{% endfor %}
+      {% if stock.short | length > 6 %}<div class="small muted">+{{ stock.short | length - 6 }} more on Materials</div>{% endif %}
+    {% endif %}
+    <div class="sub">Skill queues</div>
+    {% for r in queue_alerts[:5] %}
+      <div class="line"><span>{{ r.character.name }}</span><span class="pill {{ r.level }} small">{{ r.state }}</span></div>
+    {% else %}<div class="small muted">{{ training | length }} queue{{ 's' if training | length != 1 }} training, none ending within a day.</div>{% endfor %}
+  </section>
+</div>
+{% endblock %}

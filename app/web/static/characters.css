@@ -1,0 +1,14 @@
+/* Characters page: the Characters / Implants / Skills / Queues tabs */
+.char-tabs-bar { margin: 26px 0 10px; }
+.char-tabs a { font-size: 15px; font-weight: 600; padding: 6px 14px; }
+.char-tabs a:hover { text-decoration: none; color: var(--text); }
+.char-info td { vertical-align: middle; }
+.implant-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; max-width: 460px; }
+.implant-list span { background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px;
+  padding: 1px 7px; font-size: 12px; white-space: nowrap; }
+.attr-grid { display: flex; gap: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.attr .muted { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.queue-meter { margin-top: 5px; max-width: 260px; height: 6px; }
+.can-jump { color: var(--ok); }
+.relink-card { margin-bottom: 12px; border-color: rgba(255, 176, 32, .35); }
+.relink-card ol { margin: 8px 0 6px 18px; padding: 0; line-height: 1.9; }

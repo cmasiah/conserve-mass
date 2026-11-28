@@ -129,3 +129,19 @@ def test_rate_limit_low_threshold():
     assert not rate_limit_low("100", "150/15m")
     assert rate_limit_low("90", "1000/15m")     # under 10%
     assert not rate_limit_low(None, None)
+
+
+def test_digest_alerts_show_as_one_line_on_system_page():
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace as NS
+    from app.services.notifier import group_for_display
+    t = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+    N = lambda kind, sent, title="x", status="sent": NS(kind=kind, status=status, sent_at=sent,
+                                                       created_at=sent or t, title=title, error=None)
+    notes = [N("industry_job_ready", t + timedelta(microseconds=i)) for i in range(4)]
+    notes += [N("new_contract", t - timedelta(minutes=5), "🚚 one contract"),
+              N("test", t - timedelta(minutes=9), "👋 Test")]
+    rows = group_for_display(notes)
+    assert [len(r["items"]) for r in rows] == [4, 1, 1]
+    assert rows[0]["title"].startswith("🏭 4 watched industry jobs")
+    assert rows[1]["title"] == "🚚 one contract"

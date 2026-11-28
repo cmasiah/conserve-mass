@@ -2,15 +2,17 @@
 #
 # Your own settings live in two LOCAL files next to this one, which update.sh never
 # touches and which are never committed:
-#   .env                        CMASS_PORT, TZ, CMASS_APPDATA   (see deploy.env.example)
+#   .env                        CMASS_PORT, TZ, CMASS_APPDATA, CMASS_IMAGE_TAG
+#                               (see deploy.env.example)
 #   docker-compose.override.yml join your reverse-proxy network (see *.override.example.yml)
 # Docker Compose reads both automatically.
 #
 # First run / update (from this folder):  bash update.sh
-# Roll back: set image to a version tag, e.g. ghcr.io/cmasiah/conserve-mass:0.4.1
+# Release channel: CMASS_IMAGE_TAG=latest (stable, from main) or beta (from the beta branch).
+# Roll back: set CMASS_IMAGE_TAG to a version tag, e.g. 0.4.3
 services:
   conserve-mass:
-    image: ghcr.io/cmasiah/conserve-mass:latest
+    image: ghcr.io/cmasiah/conserve-mass:${CMASS_IMAGE_TAG:-latest}
     # To build locally instead of pulling, uncomment:
     # build: .
     container_name: conserve-mass

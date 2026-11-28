@@ -20,7 +20,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db import session_scope, utcnow
+from app.db import release_write_lock, session_scope, utcnow
 from app.models import Notification
 
 log = logging.getLogger(__name__)
@@ -40,6 +40,8 @@ DIGEST_TITLES = {
     "status_cancelled": "🚫 {n} contracts cancelled",
     "status_deleted": "🗑️ {n} contracts deleted",
     "status_rejected": "↩️ {n} contracts rejected",
+    "industry_job_ready": "🏭 {n} watched industry jobs ready for delivery",
+    "research_job_ready": "🔬 {n} research jobs finished",
 }
 
 _sent_times: deque[float] = deque()  # monotonic timestamps of messages sent (last hour)
@@ -48,7 +50,11 @@ _sent_times: deque[float] = deque()  # monotonic timestamps of messages sent (la
 def enqueue(db: Session, *, ref: str, kind: str, title: str, body: str = "",
             url: str | None = None, line: str | None = None,
             subject_id: int | None = None) -> bool:
-    """Queue a notification. Returns False if this (ref, kind) was already queued."""
+    """Queue a notification. Returns False if it was already queued, or if you've
+    switched this kind of notification off on the Notifications settings page."""
+    from app.services import prefs
+    if not prefs.is_enabled(db, kind):
+        return False
     stmt = insert(Notification).values(
         ref=ref, kind=kind, title=title[:256], body=body, url=url, line=line,
         subject_id=subject_id, status="pending", attempts=0, created_at=utcnow(),
@@ -94,6 +100,33 @@ def digest_text(kind: str, items: list) -> tuple[str, str]:
     return title, "\n".join(lines)
 
 
+def group_for_display(notes: list, window_seconds: float = 0.05) -> list[dict]:
+    """Fold alerts that went out as one Discord digest into one line for the System page.
+
+    Notes must be newest first. Sent alerts of a digestible kind sent within
+    `window_seconds` of each other were delivered together (separate messages are further
+    apart, since each one waits for Discord).
+    """
+    out: list[dict] = []
+    for n in notes:
+        last = out[-1] if out else None
+        if (last and n.status == "sent" and n.kind in DIGEST_TITLES
+                and last["status"] == "sent" and last["kind"] == n.kind
+                and n.sent_at and last["sent_at"]
+                and abs((last["sent_at"] - n.sent_at).total_seconds()) <= window_seconds):
+            last["items"].append(n)
+            continue
+        out.append({"kind": n.kind, "status": n.status, "sent_at": n.sent_at,
+                    "created_at": n.created_at, "error": n.error, "items": [n]})
+    for g in out:
+        if len(g["items"]) > 1:
+            g["title"] = DIGEST_TITLES[g["kind"]].format(n=len(g["items"]))
+            g["created_at"] = min(i.created_at for i in g["items"])
+        else:
+            g["title"] = g["items"][0].title
+    return out
+
+
 def _hourly_budget() -> int:
     now = time.monotonic()
     while _sent_times and now - _sent_times[0] > 3600:
@@ -127,10 +160,12 @@ async def dispatch_pending() -> None:
             for n in msg.items:
                 n.attempts += 1
             try:
+                release_write_lock("Discord send")
                 await bot.send_owner(title, body, url, msg.kind)
                 _sent_times.append(time.monotonic())
+                sent_at = utcnow()   # one timestamp per message, so a digest stays groupable
                 for n in msg.items:
-                    n.status, n.sent_at, n.error = "sent", utcnow(), None
+                    n.status, n.sent_at, n.error = "sent", sent_at, None
             except Exception as e:  # noqa: BLE001 — record any delivery failure
                 log.warning("Discord delivery failed (%s, %d alert(s)): %s",
                             msg.kind, len(msg.items), e)

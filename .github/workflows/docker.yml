@@ -1,17 +1,23 @@
-# Builds the image on every push to main and publishes it to GitHub Container Registry:
-#   ghcr.io/<owner>/conserve-mass:latest   (newest main)
-#   ghcr.io/<owner>/conserve-mass:<x.y.z>   (APP_VERSION from app/config.py, for rollback)
-#   ghcr.io/<owner>/conserve-mass:sha-<short>
+# Builds and publishes the image to GitHub Container Registry.
+#   push to main  -> :latest, :<x.y.z> (APP_VERSION, for rollback), :sha-<commit>   (stable)
+#                    + git tag v<x.y.z>
+#   push to beta  -> :beta, :sha-<commit>                                          (beta)
+#                    + git tag v<x.y.N>-beta, where N counts up with every merge
+#   pull request  -> tests + a test build only; nothing is published
+#
+# Version numbers: APP_VERSION in app/config.py is set by hand only for a release
+# (e.g. 0.7.0). Every merge into beta after that is the next number automatically:
+# 0.7.1, 0.7.2, ... (APP_VERSION's patch + merges since the line last changed).
 name: build-image
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write     # push the version tag (v0.7.3-beta / v0.7.0)
   packages: write
 
 jobs:
@@ -40,19 +46,58 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # full history: the beta number counts merges
 
-      - name: Read app version
+      - name: Work out the version
         id: ver
-        run: echo "version=$(grep -oP '^APP_VERSION = "\K[^"]+' app/config.py)" >> "$GITHUB_OUTPUT"
+        run: |
+          base=$(grep -oP '^APP_VERSION = "\K[^"]+' app/config.py)
+          if [ "$GITHUB_REF" = "refs/heads/beta" ]; then
+            # Merges since APP_VERSION last changed, added to its patch number.
+            since=$(git log -1 --format=%H -G '^APP_VERSION = ' -- app/config.py)
+            n=$(git rev-list --count --first-parent "$since"..HEAD)
+            IFS=. read -r major minor patch <<< "$base"
+            version="$major.$minor.$((patch + n))"
+            gittag="v$version-beta"
+          else
+            version="$base"
+            gittag="v$version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "gittag=$gittag" >> "$GITHUB_OUTPUT"
+          echo "Version: $version"
 
       - name: Image name (lowercase owner)
         id: img
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/conserve-mass" >> "$GITHUB_OUTPUT"
 
+      - name: Channel and tags
+        id: tags
+        env:
+          IMG: ${{ steps.img.outputs.name }}
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          push=true
+          if [ "$GITHUB_REF" = "refs/heads/beta" ]; then
+            channel=beta
+            tags="$IMG:beta"$'\n'"$IMG:sha-$GITHUB_SHA"
+          elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            channel=stable
+            tags="$IMG:latest"$'\n'"$IMG:$VER"$'\n'"$IMG:sha-$GITHUB_SHA"
+          else
+            # pull requests and manual runs on other branches: build to test, never publish
+            channel=test; push=false
+            tags="$IMG:test"
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+          { echo "list<<EOF"; echo "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: steps.tags.outputs.push == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -64,13 +109,26 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ steps.img.outputs.name }}:latest
-            ${{ steps.img.outputs.name }}:${{ steps.ver.outputs.version }}
-            ${{ steps.img.outputs.name }}:sha-${{ github.sha }}
+          push: ${{ steps.tags.outputs.push == 'true' }}
+          tags: ${{ steps.tags.outputs.list }}
+          build-args: |
+            RELEASE_CHANNEL=${{ steps.tags.outputs.channel }}
+            GIT_SHA=${{ github.sha }}
+            BUILD_VERSION=${{ steps.tags.outputs.push == 'true' && steps.ver.outputs.version || '' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Tag the commit with its version
+        if: steps.tags.outputs.push == 'true'
+        env:
+          TAG: ${{ steps.ver.outputs.gittag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists"
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+          fi

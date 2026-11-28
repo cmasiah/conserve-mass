@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Notifications · {{ APP_NAME }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/notify.css?v={{ ASSET_V }}">{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Discord notifications</h1>
+  <span class="spacer"></span>
+  <a class="btn" href="/system" title="System → Send Test Message (always sends)">Send a test DM…</a>
+  <button form="notify-form" class="primary save-top">Save preferences</button>
+</div>
+<p class="muted small" style="margin-top:0">Pick which DMs you get. Switching one off stops new alerts of that kind; anything
+  already sent is unaffected. Several alerts of the same kind arriving together still come as one digest message.
+  New kinds of alert always start <strong>off</strong>.</p>
+
+<form method="post" id="notify-form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="notify-grid">
+  {% for group, items in groups.items() %}
+    <section class="card notify-card" data-group>
+      <div class="notify-head">
+        <h2>{{ group }}</h2>
+        <span class="spacer"></span>
+        <button type="button" class="small subtle" data-all="1">All on</button>
+        <button type="button" class="small subtle" data-all="0">All off</button>
+      </div>
+      {% for k, on in items if k.key != 'industry_job_ready' %}
+        <label class="switch-row">
+          <input type="checkbox" class="switch" name="kind_{{ k.key }}" value="1" {{ 'checked' if on }}>
+          <span><strong>{{ k.label }}</strong>{% if k.help %}<span class="small muted">{{ k.help }}</span>{% endif %}</span>
+        </label>
+      {% endfor %}
+
+      {% if group == 'Industry' %}
+        {% set watched = items | selectattr('0.key', 'equalto', 'industry_job_ready') | list %}
+        <div class="watch">
+          {% for k, on in watched %}
+          <label class="switch-row watch-switch">
+            <input type="checkbox" class="switch" name="kind_{{ k.key }}" value="1" {{ 'checked' if on }}>
+            <span><strong>{{ k.label }}</strong><span class="small muted">A manufacturing job for anything picked below is ready for delivery.</span></span>
+          </label>
+          {% endfor %}
+          <div class="chip-toggles">
+            {% for key, label, help, on in rules %}
+              <label class="chip-toggle" title="{{ help }}">
+                <input type="checkbox" name="rule_{{ key }}" value="1" {{ 'checked' if on }}>
+                <span>{{ label }}</span>
+              </label>
+            {% endfor %}
+          </div>
+          <label class="kw">
+            <span class="small"><strong>Also watch anything whose name contains</strong> <span class="muted">(comma separated)</span></span>
+            <input type="text" name="industry_keywords" value="{{ keywords | join(', ') }}"
+                   placeholder="e.g. Orca, Capital Construction Parts, Ragnarok" autocomplete="off">
+          </label>
+          <div class="kw-chips" aria-live="polite">{% for k in keywords %}<span class="chip">{{ k }}</span>{% endfor %}</div>
+        </div>
+      {% endif %}
+    </section>
+  {% endfor %}
+  </div>
+
+  <div class="save-bar">
+    <span class="small muted" id="dirty">No unsaved changes</span>
+    <span class="spacer"></span>
+    <button type="reset" class="subtle" id="undo" disabled>Undo changes</button>
+    <button class="primary" id="save">Save preferences</button>
+  </div>
+</form>
+
+<script>
+(() => {
+  const form = document.getElementById('notify-form');
+  const dirty = document.getElementById('dirty'), undo = document.getElementById('undo');
+  const kw = form.querySelector('input[name="industry_keywords"]');
+  const chips = form.querySelector('.kw-chips');
+  const mark = () => { dirty.textContent = 'Unsaved changes'; dirty.classList.add('warn-text'); undo.disabled = false; };
+  const drawChips = () => {
+    if (!kw || !chips) return;
+    chips.replaceChildren(...kw.value.split(',').map(s => s.trim()).filter(Boolean).map(s => {
+      const c = document.createElement('span'); c.className = 'chip'; c.textContent = s.toLowerCase(); return c;
+    }));
+  };
+  form.addEventListener('change', mark);
+  if (kw) kw.addEventListener('input', () => { mark(); drawChips(); });
+  form.querySelectorAll('[data-group]').forEach((card) => {
+    card.querySelectorAll('[data-all]').forEach((b) => b.addEventListener('click', () => {
+      card.querySelectorAll('input[type=checkbox]').forEach((c) => { c.checked = b.dataset.all === '1'; });
+      mark();
+    }));
+  });
+  form.addEventListener('reset', () => setTimeout(() => {
+    dirty.textContent = 'No unsaved changes'; dirty.classList.remove('warn-text'); undo.disabled = true; drawChips();
+  }));
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,36 @@
+{#- Standalone on purpose: no base.html, no session, no database. It has to render even
+    when whatever broke the page was the database itself. -#}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · {{ APP_NAME }}</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ ASSET_V }}">
+  <style>
+    .err-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .err-card { max-width: 520px; text-align: left; }
+    .err-card h1 { margin: 6px 0 8px; font-size: 20px; }
+    .err-ico { font-size: 34px; line-height: 1; margin-top: 16px; }
+    .err-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+    .err-ref { margin-top: 16px; }
+  </style>
+</head>
+<body>
+<div class="err-wrap">
+  <div class="card err-card">
+    <div class="brand">{{ APP_NAME }}</div>
+    <div class="err-ico" aria-hidden="true">{{ icon }}</div>
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    {% if hint %}<p class="small muted">{{ hint }}</p>{% endif %}
+    <div class="err-actions">
+      {% if retry_url %}<a class="btn primary" href="{{ retry_url }}">Try again</a>{% endif %}
+      <a class="btn" href="{{ back_url }}">{{ back_label }}</a>
+      <a class="btn" href="/logs">View logs</a>
+    </div>
+    <p class="small muted err-ref">{{ status }} · {{ when }} UTC · {{ APP_VERSION }}</p>
+  </div>
+</div>
+</body>
+</html>
