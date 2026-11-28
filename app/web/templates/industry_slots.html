@@ -9,7 +9,7 @@
   {%- else -%}
     {%- set d = detail[r.character.character_id][cat] -%}
     {%- set cap = d.capacity -%}{%- set used = r.used.get(cat, 0) -%}
-    <div class="tip slotcell {{ 'gold' if cap >= gold else ('short' if cap else '') }}" tabindex="0">
+    <div class="tip slotcell {{ 'short' if 0 < cap < gold }}" tabindex="0">
       {% if cap %}
         <div class="nums"><strong>{{ used }}</strong><span class="muted cap-n"> / {{ cap }}</span>
           <span class="small muted">in use</span></div>
@@ -18,8 +18,7 @@
         <div class="nums muted">—</div>
       {% endif %}
       <div class="tip-body">
-        <div class="tip-head">{{ labels[cat] }} · {{ cap }} slot{{ 's' if cap != 1 }}{% if cat == 'reactions' and not cap %} (needs Reactions){% endif %}
-          {%- if cap >= gold %} <span class="gold-badge">★ {{ gold }}+</span>{% elif cap %} <span class="short-note">{{ gold - cap }} short of {{ gold }}</span>{% endif %}</div>
+        <div class="tip-head">{{ labels[cat] }} · {{ cap }} slot{{ 's' if cap != 1 }}{% if cat == 'reactions' and not cap %} (needs Reactions){% endif %}</div>
         {% for s in d.rows %}
           <div class="tip-row"><span>{{ s.name }}</span>{{ pips(s.level, s.queued) }}<span class="tip-note">{{ s.note }}</span></div>
         {% endfor %}
@@ -61,11 +60,17 @@
   {%- set ds = 'desc' if desc else 'asc' -%}
   <div class="tabs slot-filters">
     <a href="?sort={{ sort }}&dir={{ ds }}" class="{{ 'active' if not only }}">All</a>
-    <span class="tab-group">★ {{ gold }}+</span>
-    {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=gold:{{ c }}" class="{{ 'active' if only == 'gold:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ gold_counts[c] }}</span></a>{% endfor %}
-    <span class="tab-group short-label">Under {{ gold }}</span>
-    {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=under:{{ c }}" class="{{ 'active' if only == 'under:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ under_counts[c] }}</span></a>{% endfor %}
-    <a href="?sort={{ sort }}&dir={{ ds }}&only=capital" class="{{ 'active' if only == 'capital' }}">Capital builders</a>
+    <span class="tab-box">
+      <span class="tab-group">{{ gold }}+ slots</span>
+      {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=gold:{{ c }}" class="{{ 'active' if only == 'gold:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ gold_counts[c] }}</span></a>{% endfor %}
+    </span>
+    <span class="tab-box short-box">
+      <span class="tab-group">Under {{ gold }}</span>
+      {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=under:{{ c }}" class="{{ 'active' if only == 'under:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ under_counts[c] }}</span></a>{% endfor %}
+    </span>
+    <span class="tab-box">
+      <a href="?sort={{ sort }}&dir={{ ds }}&only=capital" class="{{ 'active' if only == 'capital' }}">Capital builders</a>
+    </span>
   </div>
   <span class="spacer"></span>
   <span class="small muted">Hover a slot count for the skills behind it.</span>

@@ -23,7 +23,7 @@ class Kind:
 
 
 KINDS: list[Kind] = [
-    Kind("new_contract", "New courier contract", "A new contract is assigned to the corp.", "Hauling"),
+    Kind("new_contract", "New courier received", "A new contract is assigned to the corp.", "Hauling"),
     Kind("expiring", "Unaccepted contract expiring soon",
          "An outstanding contract expires within EXPIRY_WARNING_HOURS.", "Hauling"),
     Kind("delivery_due", "Delivery deadline approaching",
@@ -48,6 +48,44 @@ KINDS: list[Kind] = [
          "Once per new version published to main (stable). Beta builds never ping.",
          "Safety & system"),
 ]
+
+
+@dataclass(frozen=True)
+class Switch:
+    """One toggle on the settings page. Most control one kind; a few cover several
+    closely related contract updates, so the page stays short."""
+    key: str
+    label: str
+    help: str
+    group: str
+    covers: tuple[str, ...]
+
+
+_COMBINED = {
+    "status_progress": ("Contract accepted, delivered, or failed",
+                        "Someone accepted, completed or failed one of the corp's contracts.",
+                        ("status_accepted", "status_finished", "status_failed")),
+    "status_closed": ("Contract cancelled, deleted, or rejected",
+                      "The issuer cancelled or deleted it, or it was rejected.",
+                      ("status_cancelled", "status_deleted", "status_rejected")),
+}
+_IN_COMBINED = {k: sw for sw, (_l, _h, ks) in _COMBINED.items() for k in ks}
+
+
+def _switches() -> list[Switch]:
+    out, done = [], set()
+    for k in KINDS:
+        sw = _IN_COMBINED.get(k.key)
+        if sw is None:
+            out.append(Switch(k.key, k.label, k.help, k.group, (k.key,)))
+        elif sw not in done:
+            done.add(sw)
+            label, help_, covers = _COMBINED[sw]
+            out.append(Switch(sw, label, help_, k.group, covers))
+    return out
+
+
+SWITCHES = _switches()
 KIND_BY_KEY = {k.key: k for k in KINDS}
 ALWAYS_ON = {"test"}  # the System page's test DM
 
@@ -147,8 +185,10 @@ def _set(db: Session, key: str, value: str) -> None:
 
 def save(db: Session, form: dict[str, str]) -> None:
     """form: submitted checkbox names (present = on) plus 'industry_keywords'."""
-    for k in KINDS:
-        _set(db, k.key, "1" if form.get(f"kind_{k.key}") else "0")
+    for sw in SWITCHES:
+        on = "1" if form.get(f"kind_{sw.key}") else "0"
+        for kind in sw.covers:
+            _set(db, kind, on)
     for key in INDUSTRY_RULES:
         _set(db, f"industry:{key}", "1" if form.get(f"rule_{key}") else "0")
     _set(db, "industry:keywords", (form.get("industry_keywords") or "").strip()[:1000])
@@ -159,9 +199,12 @@ def save(db: Session, form: dict[str, str]) -> None:
 def snapshot(db: Session) -> dict:
     """Everything the settings page needs."""
     rules, keywords = industry_rules(db)
-    groups: dict[str, list[tuple[Kind, bool]]] = {}
-    for k in KINDS:
-        groups.setdefault(k.group, []).append((k, is_enabled(db, k.key)))
+    groups: dict[str, list[tuple[Switch, bool]]] = {}
+    for sw in SWITCHES:
+        # A combined switch shows on if any part is on (older settings may differ);
+        # saving the page sets all its parts the same.
+        groups.setdefault(sw.group, []).append(
+            (sw, any(is_enabled(db, k) for k in sw.covers)))
     return {"groups": groups,
             "rules": [(key, r.label, RULE_HELP.get(key) or ", ".join(sorted(r.groups)),
                        key in rules) for key, r in INDUSTRY_RULES.items()],

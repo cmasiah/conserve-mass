@@ -154,7 +154,7 @@ def test_slots_filters_sorting_and_highlights(db):
         html = c.get("/industry/slots?only=gold:manufacturing").text
         body = html.split("<tbody>")[1]
         assert "Alpha" in body and "Charlie" in body and "Bravo" not in body
-        assert "slotcell gold" in html
+        assert "slotcell gold" not in html and "short of" not in html   # plain 10+
         body = c.get("/industry/slots?sort=capital&dir=desc").text.split("<tbody>")[1]
         assert body.index("Alpha") < body.index("Charlie") < body.index("Bravo")
         body = c.get("/industry/slots?sort=capital&dir=asc").text.split("<tbody>")[1]
