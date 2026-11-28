@@ -6,7 +6,8 @@
   {% block head %}{% endblock %}
   <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css?v={{ ASSET_V }}">
-  <link rel="icon" type="image/svg+xml" href="/static/icon.svg?v={{ ASSET_V }}">
+  <link rel="icon" type="image/png" href="/static/favicon.png?v={{ ASSET_V }}">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v={{ ASSET_V }}">
 </head>
 <body class="{{ 'with-nav' if user }}">
 {% if user %}
@@ -49,7 +50,7 @@
 {%- endmacro %}
 <aside class="side">
   <a href="/" class="brand-block">
-    <img src="/static/icon.svg?v={{ ASSET_V }}" alt="" width="40" height="40">
+    <img src="/static/icon.png?v={{ ASSET_V }}" alt="" width="40" height="40" class="brand-icon">
     <span class="brand">Conserve Mass<small>ops</small></span>
   </a>
 
