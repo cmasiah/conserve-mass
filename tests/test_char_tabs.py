@@ -151,3 +151,12 @@ def test_system_sync_everything_runs_both_and_stays_on_system(monkeypatch):
     monkeypatch.setattr(pages.sync_info, "pressed_message", lambda db, kind: kind)
     r = pages.sync_all(object(), "t", DB())
     assert ran == ["contracts", "industry", "flash"] and r.headers["location"] == "/system"
+
+
+def test_remote_range_in_slot_breakdown():
+    from app.services.industry import slot_breakdown
+    d = slot_breakdown({"Supply Chain Management": 4}, "manufacturing",
+                       {"Supply Chain Management": 5})
+    assert d["remote"]["jumps"] == 20 and d["remote"]["queued_jumps"] == 25
+    none = slot_breakdown({}, "reactions")["remote"]
+    assert none["jumps"] == 0 and none["reach"] == "current system only"

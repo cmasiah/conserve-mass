@@ -12,7 +12,7 @@
     <span class="small muted">Last sync {{ sync.last_success_at | delta(now) }}
       {% if sync.last_error %}<span class="pill bad" title="{{ sync.last_error }}">error</span>{% endif %}</span>
   {% endif %}
-  {{ sync_now(sync_feeds, "/system/sync-now", csrf, now) }}
+  {{ sync_now(sync_feeds, "/system/sync-now", csrf, now, label="Sync Contracts") }}
 </div>
 
 {% if not corp %}
