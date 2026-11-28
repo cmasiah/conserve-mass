@@ -122,8 +122,10 @@ def slot_breakdown(levels: dict[str, int], cat: str,
         reach = f"within {rl * per} jumps"
     else:
         reach = f"level {rl} remote range"
+    rq = max(queued.get(remote, 0), rl)
     return {"rows": rows, "remote": {"name": remote, "level": rl, "reach": reach,
-                                     "queued": max(queued.get(remote, 0), rl)},
+                                     "queued": rq, "jumps": rl * (per or 0),
+                                     "queued_jumps": rq * (per or 0)},
             "capacity": slot_capacity(levels)[cat]}
 
 

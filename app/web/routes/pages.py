@@ -214,7 +214,7 @@ def characters(request: Request, tab: str = "list", db: Session = Depends(get_db
                   implants=charinfo.implant_rows(db, chars) if tab == "implants" else {},
                   skills=charinfo.skill_rows(db, chars) if tab == "skills" else {},
                   queues=charinfo.queue_rows(db, chars) if tab == "queues" else {},
-                  now=utcnow())
+                  now=utcnow(), sync_feeds=sync_info.feeds(db, "industry"))
 
 
 @router.post("/characters/{character_id}/track")
@@ -424,6 +424,19 @@ def sync_now(request: Request, csrf: str = Form(""), db: Session = Depends(get_d
     trigger_sync_now()
     flash(request, sync_info.pressed_message(db, "contracts"))
     return _redirect("/hauling")
+
+
+@router.post("/system/sync-all")
+def sync_all(request: Request, csrf: str = Form(""), db: Session = Depends(get_db)):
+    """System page: check every feed now (contracts, skills/implants, jobs, blueprints,
+    assets). ESI still serves its cached copy until that expires; the message says when."""
+    require_csrf(request, csrf)
+    from app.jobs.scheduler import trigger_industry_now, trigger_sync_now
+    trigger_sync_now()
+    trigger_industry_now()
+    flash(request, sync_info.pressed_message(db, "contracts") + " "
+          + sync_info.pressed_message(db, "industry"))
+    return _redirect("/system")
 
 
 @router.post("/system/backup-now")

@@ -61,6 +61,8 @@ def slots(request: Request, sort: str = "name", dir: str = "", only: str = "",
         rows = [r for r in rows if r.has_skills and r.capacity.get(cat, 0) < gold]
     elif only == "capital":
         rows = [r for r in rows if r.capital_level >= 1]
+    elif kind == "remote" and cat in CATS:
+        rows = [r for r in rows if r.has_skills and r.levels.get(industry.REMOTE_SKILLS[cat], 0)]
 
     # Default direction: names A→Z, everything else biggest first. dir flips it.
     desc = (sort != "name") if dir not in ("asc", "desc") else dir == "desc"
@@ -74,11 +76,14 @@ def slots(request: Request, sort: str = "name", dir: str = "", only: str = "",
         rows.sort(key=lambda r: (r.character.name or "").lower(), reverse=desc)
     under_counts = {c: sum(1 for r in synced if r.capacity.get(c, 0) < gold) for c in CATS}
     gold_counts = {c: sum(1 for r in synced if r.capacity.get(c, 0) >= gold) for c in CATS}
+    remote_counts = {c: sum(1 for r in synced if r.levels.get(industry.REMOTE_SKILLS[c], 0))
+                     for c in CATS}
     detail = {r.character.character_id: {c: industry.slot_breakdown(r.levels, c, r.queued)
                                          for c in CATS}
               for r in rows if r.has_skills}
     return render(request, "industry_slots.html", rows=rows, sort=sort, only=only, cats=CATS,
                   desc=desc, gold=gold, under_counts=under_counts, gold_counts=gold_counts,
+                  remote_counts=remote_counts,
                   labels=industry.CATEGORY_LABELS, totals=totals, detail=detail,
                   tracked=len(everyone), synced=len(synced), capital_builders=capital_builders,
                   tiers=industry.CAPITAL_TIERS, tier_rows=industry.CAPITAL_TIER_ROWS,
@@ -297,5 +302,5 @@ def sync_now(request: Request, csrf: str = Form(""), back: str = Form("/industry
     from app.jobs.scheduler import trigger_industry_now
     trigger_industry_now()
     flash(request, sync_info.pressed_message(db, "industry"))
-    return RedirectResponse(back if back.startswith("/industry") else "/industry/slots",
-                            status_code=303)
+    ok = back.startswith("/industry") or back.startswith("/characters")
+    return RedirectResponse(back if ok else "/industry/slots", status_code=303)

@@ -4,6 +4,13 @@
 {% macro pips(level, queued=0) -%}
   <span class="pips" aria-label="level {{ level }}{{ ', training to ' ~ queued if queued > level }}">{% for i in range(5) %}<i class="{{ 'on' if i < level else ('q' if i < queued) }}"></i>{% endfor %}</span>
 {%- endmacro %}
+{#- 📡 when a remote skill is trained (or queued); the range is in its hover and in the
+    slot tooltip. Nothing = only jobs in the system you're in. -#}
+{% macro remote_tag(rm) -%}
+  {%- if rm.level or rm.queued_jumps > rm.jumps -%}
+  <span class="remote-tag {{ 'queued' if not rm.level }}" title="{{ rm.name }} {{ rm.level }}: start jobs {{ rm.reach }}{{ ' · training to ' ~ rm.queued_jumps ~ ' jumps' if rm.queued_jumps > rm.jumps }}">📡</span>
+  {%- endif -%}
+{%- endmacro %}
 {% macro slotcell(r, cat) -%}
   {%- if not r.has_skills -%}<span class="muted small">no skill data</span>
   {%- else -%}
@@ -12,7 +19,7 @@
     <div class="tip slotcell {{ 'short' if 0 < cap < gold }}" tabindex="0">
       {% if cap %}
         <div class="nums"><strong>{{ used }}</strong><span class="muted cap-n"> / {{ cap }}</span>
-          <span class="small muted">in use</span></div>
+          <span class="small muted">in use</span>{{ remote_tag(d.remote) }}</div>
         <div class="meter {{ 'full' if used >= cap }}"><span style="width: {{ (used / cap * 100) | round(0) }}%"></span></div>
       {% else %}
         <div class="nums muted">—</div>
@@ -69,7 +76,11 @@
       {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=under:{{ c }}" class="{{ 'active' if only == 'under:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ under_counts[c] }}</span></a>{% endfor %}
     </span>
     <span class="tab-box">
-      <a href="?sort={{ sort }}&dir={{ ds }}&only=capital" class="{{ 'active' if only == 'capital' }}">Capital builders</a>
+      <span class="tab-group" title="Can start jobs outside the system they're in">📡 Remote</span>
+      {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=remote:{{ c }}" class="{{ 'active' if only == 'remote:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ remote_counts[c] }}</span></a>{% endfor %}
+    </span>
+    <span class="tab-box">
+      <a href="?sort={{ sort }}&dir={{ ds }}&only=capital" class="{{ 'active' if only == 'capital' }}">Capital builders <span class="tab-n">{{ capital_builders }}</span></a>
     </span>
   </div>
   <span class="spacer"></span>
