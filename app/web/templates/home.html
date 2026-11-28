@@ -53,6 +53,7 @@
       </div>
       {% endfor %}
     </div>
+    <div class="line"><span class="muted small">Exposure now</span><span><strong>{{ exposure_now | isk }}</strong>{% if open_bulk %} <a class="small" href="/contracts/bulk">· {{ open_bulk }} bulk job{{ 's' if open_bulk != 1 }}</a>{% endif %}</span></div>
     <div class="sub">Next deadlines</div>
     {% for d in deadlines %}
       <a class="line" href="/contracts/{{ d.c.contract_id }}">

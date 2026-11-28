@@ -48,8 +48,10 @@ class IndustrySummary:
 
 
 def _not_blocked():
+    """Couriers from issuers that aren't blocked (bulk jobs have their own summary)."""
     return Contract.issuer_id.not_in(
-        select(Customer.character_id).where(Customer.blocked.is_(True)))
+        select(Customer.character_id).where(Customer.blocked.is_(True))) & (
+        Contract.type == "courier")
 
 
 def hauling_summary(db: Session, now: datetime) -> HaulingSummary:
@@ -62,7 +64,7 @@ def hauling_summary(db: Session, now: datetime) -> HaulingSummary:
         .where(Contract.status == "in_progress", nb)).one()
     out.delivered_30d, out.reward_30d = db.execute(
         select(func.count(), func.coalesce(func.sum(Contract.reward_isk), 0))
-        .where(Contract.status.in_(FINISHED),
+        .where(Contract.status.in_(FINISHED), Contract.type == "courier",
                Contract.date_completed >= now - timedelta(days=30))).one()
     out.expiring_24h = db.scalar(select(func.count()).select_from(Contract).where(
         Contract.status == "outstanding", nb,
@@ -145,7 +147,8 @@ def isk_by_week(db: Session, now: datetime, weeks: int = 8) -> list[dict]:
     buckets = {d: {"start": d, "count": 0, "isk": 0.0} for d in starts}
     for done, reward in db.execute(
             select(Contract.date_completed, Contract.reward_isk).where(
-                Contract.status.in_(FINISHED), Contract.date_completed >= starts[0])):
+                Contract.status.in_(FINISHED), Contract.type == "courier",
+                Contract.date_completed >= starts[0])):
         wk = (done - timedelta(days=done.weekday())).replace(
             hour=0, minute=0, second=0, microsecond=0)
         if wk in buckets:
@@ -164,7 +167,8 @@ def top_customers(db: Session, now: datetime, limit: int = 5) -> list[dict]:
     q = (select(Customer.character_id, Customer.name, func.count(),
                 func.coalesce(func.sum(Contract.reward_isk), 0).label("isk"))
          .join(Contract, Contract.issuer_id == Customer.character_id)
-         .where(Contract.status.in_(FINISHED), Contract.date_completed >= month_start)
+         .where(Contract.status.in_(FINISHED), Contract.type == "courier",
+                Contract.date_completed >= month_start)
          .group_by(Customer.character_id, Customer.name)
          .order_by(func.sum(Contract.reward_isk).desc()).limit(limit))
     return [{"id": cid, "name": name or str(cid), "count": n, "isk": isk}
@@ -273,5 +277,14 @@ def build(db: Session, **flags) -> dict:
             "isk_weeks": isk_by_week(db, now), "top_customers": top_customers(db, now),
             "deadlines": deadlines(db, now, limit=5), "jobs_24h": jobs_next_24h(db, now, limit=6),
             "idle": idle_characters(db), "queues": skill_queues(db, now),
-            "stock": stock_summary(db),
+            "stock": stock_summary(db), **_bulk_bits(db, now),
             "linked": db.scalar(select(func.count()).select_from(Character)) or 0}
+
+
+def _bulk_bits(db: Session, now) -> dict:
+    from app.models import BulkJob
+    from app.services import exposure
+    e = exposure.summary(db, now, days=1)
+    return {"exposure_now": e.now, "open_bulk": db.scalar(
+        select(func.count()).select_from(BulkJob).where(
+            BulkJob.status.in_(("new", "accepted", "hauling")))) or 0}

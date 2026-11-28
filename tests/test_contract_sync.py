@@ -21,9 +21,12 @@ def raw_contract(**over):
     return base
 
 
-def test_ignores_non_courier_and_other_assignees(db):
+def test_keeps_couriers_and_bulk_ignores_others(db):
     from app.services.contract_sync import apply_contract
-    assert apply_contract(db, CORP, raw_contract(type="item_exchange")) is None
+    # Item exchanges assigned to the corp are bulk haul jobs now; auctions and contracts
+    # for someone else are still ignored.
+    assert apply_contract(db, CORP, raw_contract(type="item_exchange", price=0)) is not None
+    assert apply_contract(db, CORP, raw_contract(type="auction")) is None
     assert apply_contract(db, CORP, raw_contract(assignee_id=123)) is None
 
 

@@ -10,6 +10,8 @@
     <a href="?sort=completed{{ extra }}" class="{{ 'active' if sort == 'completed' }}">Most delivered</a>
     <a href="?sort=isk{{ extra }}" class="{{ 'active' if sort == 'isk' }}">Most ISK</a>
     <a href="?sort=recent{{ extra }}" class="{{ 'active' if sort == 'recent' }}">Most recent</a>
+    <a href="?sort=exposure{{ extra }}" class="{{ 'active' if sort == 'exposure' }}">Most in hand now</a>
+    <a href="?sort=hauled{{ extra }}" class="{{ 'active' if sort == 'hauled' }}">Most collateral hauled</a>
   </div>
   <span class="spacer"></span>
   {% if show_all %}
@@ -20,11 +22,12 @@
 </div>
 <p class="small muted">
   {% if show_all %}Every character who has issued a contract to the corp, including cancelled and deleted ones.
-  {% else %}Customers with at least one delivered contract. Earnings and volume count delivered contracts only.{% endif %}
+  {% else %}Customers with a delivered courier or any bulk job. Earnings and volume count delivered couriers; <em>in hand</em> and <em>hauled</em> include bulk jobs.{% endif %}
 </p>
 {% if rows %}
 <table>
-  <thead><tr><th>Customer</th><th>Corporation</th><th class="num">Delivered</th><th class="num">ISK earned</th>
+  <thead><tr><th>Customer</th><th>Corporation</th><th class="num" title="Collateral of accepted couriers plus the value of bulk goods in your hands">In hand now</th>
+    <th class="num" title="Collateral of delivered couriers plus delivered bulk jobs">Hauled to date</th><th class="num">Bulk jobs</th><th class="num">Delivered</th><th class="num">ISK earned</th>
     <th class="num">Volume moved</th><th class="num">Failed</th><th class="num">Withdrawn</th><th>Last delivery</th><th>Tag</th></tr></thead>
   <tbody>
   {% for s in rows %}
@@ -33,6 +36,10 @@
         {% if s.completed > 1 %}<span class="pill ok small">returning</span>{% endif %}
         {{ silenced_pill(s.customer) }}</td>
       <td class="muted">{{ s.customer.corporation_name or '' }}</td>
+      {% set e = ext.get(s.customer.character_id, blank) %}
+      <td class="num">{{ e.exposure | isk if e.exposure else '' }}</td>
+      <td class="num">{{ e.hauled | isk if e.hauled else '' }}</td>
+      <td class="num">{{ e.bulk_jobs or '' }}</td>
       <td class="num">{{ s.completed }}</td>
       <td class="num">{{ s.isk_earned | isk }}</td>
       <td class="num">{{ s.total_m3 | m3 }}</td>

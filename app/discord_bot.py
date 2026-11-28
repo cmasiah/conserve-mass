@@ -96,7 +96,8 @@ class ConserveMassBot(discord.Client):
             from app.models import Contract
             with session_scope() as db:
                 rows = db.scalars(
-                    select(Contract).where(Contract.status.in_(["outstanding", "in_progress"]))
+                    select(Contract).where(Contract.status.in_(["outstanding", "in_progress"]),
+                                           Contract.type == "courier")
                     .order_by(Contract.date_issued)).all()
                 if not rows:
                     text = "No open courier contracts. 🛌"

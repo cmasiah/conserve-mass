@@ -18,6 +18,10 @@
   <div class="card stat"><div class="label">Volume moved</div><div class="value">{{ s.total_m3 | m3 }}</div></div>
   <div class="card stat"><div class="label">Failed</div><div class="value">{{ s.failed }}</div></div>
   <div class="card stat"><div class="label">Withdrawn</div><div class="value">{{ s.withdrawn }}</div></div>
+  <div class="card stat" title="Accepted couriers' collateral plus bulk goods in your hands"><div class="label">In your hands now</div><div class="value">{{ e.exposure | isk }}</div></div>
+  <div class="card stat" title="Delivered couriers' collateral plus delivered bulk jobs"><div class="label">Collateral hauled</div><div class="value">{{ e.hauled | isk }}</div></div>
+  {% if e.bulk_jobs %}<div class="card stat"><div class="label">Bulk jobs</div><div class="value">{{ e.bulk_jobs }}</div>
+    <div class="small muted">{{ e.bulk_m3 | m3 }}{% if e.bulk_earned %} · {{ e.bulk_earned | isk }} earned{% endif %}</div></div>{% endif %}
   <div class="card stat"><div class="label">Customer since</div><div class="value" style="font-size:16px">{{ s.customer.first_seen_at | dt }}</div></div>
 </div>
 
@@ -56,6 +60,22 @@
   </form>
 </div>
 
-<h2>Contracts</h2>
+{% if jobs %}
+<h2>Bulk jobs</h2>
+<table>
+  <thead><tr><th>Job</th><th>Status</th><th class="num">Contracts</th><th class="num">Volume</th><th class="num">Goods value</th><th>Pay</th></tr></thead>
+  <tbody>
+  {% for j in jobs %}
+    <tr><td><a href="/contracts/bulk/{{ j.id }}">{{ j.title or j.first_issued_at.strftime('%Y-%m-%d %H:%M') }}</a></td>
+      <td><span class="pill small">{{ j.status }}</span></td>
+      <td class="num">{{ j.contracts | length }}</td><td class="num">{{ j.m3 | m3 }}</td>
+      <td class="num">{{ j.value_isk | isk if j.value_isk else '—' }}</td>
+      <td>{% if j.price_mode == 'upfront' %}💰 {{ j.upfront_isk | isk }}{% elif j.agreed_reward_isk %}🧾 {{ j.agreed_reward_isk | isk }}{% else %}<span class="muted">🧾 price after</span>{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>Courier contracts</h2>
 {{ contract_table(rows, now, show_customer=False) }}
 {% endblock %}

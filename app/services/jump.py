@@ -842,7 +842,8 @@ def lanes(db: Session, p: Profile | None, statuses=("outstanding", "in_progress"
           only_cynos: bool = False) -> list[Lane]:
     """Open courier contracts grouped by (pickup system, drop system), each with a route
     and trips packed for the chosen pilot; best ISK per jump first."""
-    contracts = db.scalars(select(Contract).where(Contract.status.in_(statuses))).all()
+    contracts = db.scalars(select(Contract).where(Contract.status.in_(statuses),
+                                                  Contract.type == "courier")).all()
     locs = {loc.location_id: loc for loc in db.scalars(select(Location).where(
         Location.location_id.in_({c.start_location_id for c in contracts}
                                  | {c.end_location_id for c in contracts})))}

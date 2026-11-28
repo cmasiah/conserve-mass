@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import place %}
+{% from "partials/clip.html" import copy_button, clip_script %}
+{% block title %}{{ job.title or 'Bulk job' }} · {{ APP_NAME }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/bulk.css?v={{ ASSET_V }}">{% endblock %}
+{% block content %}
+{% set who = job.customer.name if job.customer and job.customer.name else job.issuer_id %}
+<h1>Hauling Contracts</h1>
+{% include "partials/contract_tabs.html" %}
+<div class="toolbar">
+  <a class="small" href="/contracts/bulk">← Bulk jobs</a>
+  <h2 class="job-title">{{ job.title or ('Bulk job from ' ~ who) }}</h2>
+  <span class="pill job-{{ job.status }}">{{ job.status }}</span>
+  <span class="spacer"></span>
+  <span class="small muted">from <a href="/customers/{{ job.issuer_id }}">{{ who }}</a> · {{ job.first_issued_at.strftime('%Y-%m-%d %H:%M') }} EVE</span>
+</div>
+
+{% set taken = job.contracts | selectattr('status', 'in', FINISHED_EX) | list | length %}
+<div class="route-sum bulk-kpis">
+  <div class="kpi"><span class="kpi-v">{{ taken }} / {{ job.contracts | length }}</span><span class="kpi-l">contracts accepted</span>
+    <span class="kpi-s">{{ pickups | length }} pickup system{{ 's' if pickups | length != 1 }}</span></div>
+  <div class="kpi"><span class="kpi-v">{{ job.m3 | m3 }}</span><span class="kpi-l">to haul</span></div>
+  <div class="kpi"><span class="kpi-v">{{ job.value_isk | isk if job.value_isk else '—' }}</span><span class="kpi-l">goods value · Jita buy</span>
+    <span class="kpi-s">{% if price_source == 'esi' %}<span class="warn-text">estimate (CCP average; Jita prices unavailable)</span>{% elif job.priced_at %}priced {{ job.priced_at | delta(now) }}{% else %}pricing…{% endif %}</span></div>
+  <div class="kpi"><span class="kpi-v">{{ job.exposure_isk | isk if job.exposure_isk else '0' }}</span><span class="kpi-l">exposure now</span>
+    <span class="kpi-s">{{ 'your return collateral' if job.return_collateral_isk and job.exposure_isk else 'value of goods in your hands' }}</span></div>
+  <div class="kpi"><span class="kpi-v">{% if job.price_mode == 'upfront' %}{{ job.upfront_isk | isk }}{% else %}{{ job.agreed_reward_isk | isk if job.agreed_reward_isk else '—' }}{% endif %}</span>
+    <span class="kpi-l">{{ '💰 paid upfront' if job.price_mode == 'upfront' else '🧾 price after' }}</span>
+    <span class="kpi-s">{{ 'ISK on the contracts' if job.price_mode == 'upfront' else ('agreed reward' if job.agreed_reward_isk else 'set it below once agreed') }}</span></div>
+</div>
+
+<div class="bulk-grid">
+  <section class="card">
+    <h3>Pickups</h3>
+    <table class="compact">
+      <thead><tr><th>System</th><th class="num">Contracts</th><th class="num">m³</th><th class="num">Value</th>
+        {% for h in hubs %}<th class="num" title="Straight-line distance">→ {{ h.name }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for p in pickups %}
+        <tr><td><strong>{{ p.name }}</strong>{% if p.system %} <span class="sec {{ 'hs' if p.system.security >= 0.45 else ('ls' if p.system.security > 0 else 'ns') }}">{{ '%.1f' | format(p.system.security) }}</span>
+              <div class="small muted">{{ p.system.region_name or '' }}</div>{% endif %}</td>
+          <td class="num">{{ p.contracts | length }}</td>
+          <td class="num">{{ p.m3 | m3 }}</td>
+          <td class="num">{{ p.value | isk if p.value else '—' }}</td>
+          {% for h in hubs %}<td class="num {{ 'nearest' if p.nearest == h.name }}">{{ '%.3f' | format(p.hub_ly[h.name]) ~ ' LY' if h.name in p.hub_ly else '—' }}</td>{% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if not hubs %}<p class="small warn-text">Download the star map on the Jump Planner to see distances and pick the nearest hub.</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Job</h3>
+    <form method="post" class="job-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Name <input name="title" value="{{ job.title or '' }}" placeholder="{{ 'Bulk job from ' ~ who }}"></label>
+      <label>Status
+        <select name="status">{% for s in statuses %}<option value="{{ s }}" {{ 'selected' if s == job.status }}>{{ s }}</option>{% endfor %}</select></label>
+      <label>Deliver to
+        <select name="dest">
+          <option value="auto" {{ 'selected' if not job.dest_override }}>Nearest hub{{ ' (' ~ nearest.name ~ ')' if nearest }}</option>
+          {% for h in hubs %}<option value="{{ h.system_id }}" {{ 'selected' if job.dest_override and job.dest_system_id == h.system_id }}>{{ h.name }}</option>{% endfor %}
+        </select></label>
+      {% if job.price_mode == 'after' %}
+      <label>Agreed reward <input name="agreed" value="{{ job.agreed_reward_isk | isk if job.agreed_reward_isk else '' }}" placeholder="e.g. 1.2b"></label>
+      {% else %}<input type="hidden" name="agreed" value="">{% endif %}
+      <label title="If you contract the goods back with collateral, that's your exposure from then on">Return collateral <input name="collateral" value="{{ job.return_collateral_isk | isk if job.return_collateral_isk else '' }}" placeholder="{{ (job.value_isk | isk) ~ ' suggested' if job.value_isk else 'e.g. 40b' }}"></label>
+      <label class="wide">Notes <textarea name="notes" rows="2">{{ job.notes or '' }}</textarea></label>
+      <button>Save</button>
+    </form>
+    <p class="small muted">Accepting an item exchange in game completes it at once, so a contract shows <em>finished</em> as soon as the corp has the goods. Mark the job <strong>delivered</strong> when they're at the destination.</p>
+  </section>
+</div>
+
+<section class="card">
+  <div class="sec-head"><h3>Everything in this job</h3><span class="spacer"></span>{{ copy_button(clip, 'Copy all items') }}</div>
+  {% if items %}
+  <table class="compact">
+    <thead><tr><th>Item</th><th class="num">Quantity</th><th class="num">Value (Jita buy)</th></tr></thead>
+    <tbody>{% for i in items %}<tr><td>{{ i.name }}</td><td class="num">{{ '{:,}'.format(i.qty) }}</td><td class="num">{{ i.value | isk if i.value else '—' }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% else %}<p class="small muted">Items are read from ESI after the next contract sync.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h3>Contracts</h3>
+  <table class="compact bulk-contracts">
+    <thead><tr><th>Contract</th><th>Pickup</th><th>Status</th><th class="num">m³</th><th class="num">Value</th><th class="num">Reward</th><th>Timing</th><th></th></tr></thead>
+    <tbody>
+    {% for c in job.contracts %}
+      <tr>
+        <td><a href="/contracts/{{ c.contract_id }}">#{{ c.contract_id }}</a>{% if c.title %}<div class="small muted">{{ c.title }}</div>{% endif %}</td>
+        <td>{{ place(c.start_location) }}</td>
+        <td><span class="pill small {{ 'ok' if c.status in FINISHED_EX else ('warn' if c.status == 'outstanding' else 'bad') }}">{{ 'accepted' if c.status in FINISHED_EX else c.status }}</span></td>
+        <td class="num">{{ c.volume_m3 | m3 }}</td>
+        <td class="num">{{ c.value_isk | isk if c.value_isk else '—' }}</td>
+        <td class="num">{{ c.reward_isk | isk if c.reward_isk else '0' }}</td>
+        <td class="small">{% if c.status == 'outstanding' and c.date_expired %}expires {{ c.date_expired | delta(now) }}{% elif c.date_completed %}accepted {{ c.date_completed | delta(now) }}{% else %}issued {{ c.date_issued | delta(now) }}{% endif %}</td>
+        <td>{% if per_contract[c.contract_id] %}
+          <details class="contract-items"><summary class="small">{{ per_contract[c.contract_id] | length }} item type{{ 's' if per_contract[c.contract_id] | length != 1 }}</summary>
+            <div class="items-pop">
+              {{ copy_button(clip_by_contract[c.contract_id], 'Copy') }}
+              <table class="compact">{% for i in per_contract[c.contract_id] %}<tr><td>{{ i.name }}</td><td class="num">{{ '{:,}'.format(i.qty) }}</td></tr>{% endfor %}</table>
+            </div></details>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{{ clip_script() }}
+{% endblock %}

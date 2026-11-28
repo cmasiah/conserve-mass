@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Bulk jobs · {{ APP_NAME }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/bulk.css?v={{ ASSET_V }}">{% endblock %}
+{% block content %}
+<h1>Hauling Contracts</h1>
+{% include "partials/contract_tabs.html" %}
+<div class="toolbar">
+  <div class="tabs">
+    {% for key, label in [('open', 'Open'), ('done', 'Delivered & closed'), ('all', 'All')] %}
+      <a href="?view={{ key }}" class="{{ 'active' if view == key }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+  <span class="spacer"></span>
+  <span class="small muted">Item-exchange contracts assigned to the corp, grouped per requester (issued within 2 hours of each other).</span>
+</div>
+
+{% if jobs %}
+<table class="bulk-table">
+  <thead><tr>
+    <th>Job</th><th>Status</th><th class="num">Contracts</th><th>Pickups</th>
+    <th class="num">Volume</th><th class="num">Goods (Jita buy)</th><th>Pay</th><th>To</th><th>Next deadline</th>
+  </tr></thead>
+  <tbody>
+  {% for j in jobs %}
+    {%- set taken = j.contracts | selectattr('status', 'in', FINISHED_EX) | list | length -%}
+    {%- set waiting = j.contracts | selectattr('status', 'equalto', 'outstanding') | list -%}
+    {%- set systems = j.contracts | map(attribute='start_location') | select | map(attribute='system_name') | select | unique | list -%}
+    <tr>
+      <td><a href="/contracts/bulk/{{ j.id }}"><strong>{{ j.title or (j.customer.name if j.customer and j.customer.name else j.issuer_id) }}</strong></a>
+        <div class="small muted">{{ j.first_issued_at.strftime('%Y-%m-%d %H:%M') }} EVE</div></td>
+      <td><span class="pill small job-{{ j.status }}">{{ j.status }}</span></td>
+      <td class="num">{{ taken }} / {{ j.contracts | length }}<div class="small muted">accepted</div></td>
+      <td class="small">{{ systems[:3] | join(', ') }}{% if systems | length > 3 %} +{{ systems | length - 3 }}{% endif %}</td>
+      <td class="num">{{ j.m3 | m3 }}</td>
+      <td class="num">{{ j.value_isk | isk if j.value_isk else '—' }}</td>
+      <td>{% if j.price_mode == 'upfront' %}<span class="pill small ok" title="ISK on the contracts">💰 {{ j.upfront_isk | isk }}</span>
+          {% elif j.agreed_reward_isk %}<span class="pill small info" title="Agreed after">🧾 {{ j.agreed_reward_isk | isk }}</span>
+          {% else %}<span class="pill small warn" title="0 ISK: set a price after">🧾 price after</span>{% endif %}</td>
+      <td>{{ dests[j.dest_system_id].name if j.dest_system_id in dests else '—' }}{% if j.dest_override %} <span class="muted small" title="Chosen by you">✎</span>{% endif %}</td>
+      <td class="small">{% if waiting %}{% set first = waiting | map(attribute='date_expired') | select | min %}{% if first %}accept {{ first | delta(now) }}{% endif %}
+          {% elif j.status == 'delivered' and j.delivered_at %}delivered {{ j.delivered_at | delta(now) }}{% else %}—{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card empty">
+  {% if view == 'open' %}No open bulk jobs. When a requester assigns item-exchange contracts to the corp, they're grouped here automatically.
+  {% else %}Nothing here yet.{% endif %}
+</div>
+{% endif %}
+{% endblock %}

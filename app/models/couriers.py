@@ -63,6 +63,13 @@ class Contract(Base):
     volume_m3: Mapped[float | None] = mapped_column(Float)
     reward_isk: Mapped[float | None] = mapped_column(Float)
     collateral_isk: Mapped[float | None] = mapped_column(Float)
+    # Item exchange only: what the acceptor pays (0 for "haul this for me" bulk contracts).
+    price_isk: Mapped[float | None] = mapped_column(Float)
+    # Bulk (item exchange) contracts belong to a job; their goods' Jita buy value is
+    # fixed when first priced, so later price moves don't rewrite history.
+    job_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("bulk_jobs.id", ondelete="SET NULL"), index=True)
+    value_isk: Mapped[float | None] = mapped_column(Float)
     days_to_complete: Mapped[int | None] = mapped_column(Integer)
     date_issued: Mapped[datetime] = mapped_column(UTCDateTime)
     date_expired: Mapped[datetime | None] = mapped_column(UTCDateTime)
@@ -82,9 +89,17 @@ class Contract(Base):
         back_populates="contract", cascade="all, delete-orphan",
         order_by="ContractEvent.observed_at.desc()")
 
+    items: Mapped[list["ContractItem"]] = relationship(
+        back_populates="contract", cascade="all, delete-orphan", order_by="ContractItem.record_id")
+    job: Mapped["BulkJob | None"] = relationship(back_populates="contracts")
+
     @property
     def is_open(self) -> bool:
         return self.status in OPEN_STATUSES
+
+    @property
+    def is_bulk(self) -> bool:
+        return self.type == "item_exchange"
 
     @property
     def deadline(self) -> datetime | None:
@@ -108,3 +123,92 @@ class ContractEvent(Base):
     observed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     contract: Mapped[Contract] = relationship(back_populates="events")
+
+
+class ContractItem(Base):
+    """What's in a contract (ESI /contracts/{id}/items), kept so nothing is lost even after
+    the contract itself is gone."""
+    __tablename__ = "contract_items"
+
+    record_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    contract_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("contracts.contract_id", ondelete="CASCADE"), index=True)
+    type_id: Mapped[int] = mapped_column(Integer)
+    quantity: Mapped[int] = mapped_column(BigInteger)
+    is_included: Mapped[bool] = mapped_column(Boolean, default=True)   # False = asked for
+    is_bpc: Mapped[bool] = mapped_column(Boolean, default=False)
+    unit_m3: Mapped[float | None] = mapped_column(Float)      # packaged volume, if known
+    unit_value: Mapped[float | None] = mapped_column(Float)   # Jita buy when priced
+
+    contract: Mapped[Contract] = relationship(back_populates="items")
+
+
+# Bulk job lifecycle (ours; ESI's item-exchange status flips to "finished" the moment the
+# corp accepts, which here means "in our hands", not delivered).
+JOB_STATUSES = ["new", "accepted", "hauling", "delivered", "closed"]
+
+
+class BulkJob(Base):
+    """A batch of bulk-haul (item exchange) contracts from one requester, arriving together.
+    Paid upfront (ISK on the contracts) or priced after (0 ISK, reward agreed later)."""
+    __tablename__ = "bulk_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    issuer_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("customers.character_id"),
+                                           index=True)
+    corporation_id: Mapped[int] = mapped_column(BigInteger)
+    title: Mapped[str | None] = mapped_column(String(128))
+    first_issued_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    last_issued_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    status: Mapped[str] = mapped_column(String(16), default="new")
+    # Destination hub: nearest by default; dest_override marks a manual choice.
+    dest_system_id: Mapped[int | None] = mapped_column(BigInteger)
+    dest_override: Mapped[bool] = mapped_column(Boolean, default=False)
+    # "Price after" jobs: what was quoted / actually paid, entered later (Batch B watches
+    # the return contract).
+    agreed_reward_isk: Mapped[float | None] = mapped_column(Float)
+    return_collateral_isk: Mapped[float | None] = mapped_column(Float)
+    priced_at: Mapped[datetime | None] = mapped_column(UTCDateTime)  # value snapshot time
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+    customer: Mapped[Customer] = relationship()
+    contracts: Mapped[list[Contract]] = relationship(back_populates="job",
+                                                     order_by="Contract.date_issued")
+
+    @property
+    def upfront_isk(self) -> float:
+        return sum(c.reward_isk or 0 for c in self.contracts)
+
+    @property
+    def price_mode(self) -> str:
+        """'upfront': the contracts pay ISK. 'after': 0 ISK, you set the reward later."""
+        return "upfront" if self.upfront_isk > 0 else "after"
+
+    @property
+    def m3(self) -> float:
+        return sum(c.volume_m3 or 0 for c in self.contracts)
+
+    @property
+    def value_isk(self) -> float:
+        return sum(c.value_isk or 0 for c in self.contracts)
+
+    @property
+    def exposure_isk(self) -> float:
+        """Collateral you've committed to if a return contract is set, else the goods'
+        value while they're in your hands (accepted, not yet delivered)."""
+        if self.status in ("delivered", "closed"):
+            return 0.0
+        held = sum(c.value_isk or 0 for c in self.contracts if c.status in FINISHED_EX)
+        if self.return_collateral_isk and held:
+            return self.return_collateral_isk
+        return held
+
+    @property
+    def earned_isk(self) -> float:
+        return self.upfront_isk if self.price_mode == "upfront" else (self.agreed_reward_isk or 0)
+
+
+# An item exchange the corp accepted shows as finished: the goods are ours to haul.
+FINISHED_EX = ("finished", "finished_contractor", "finished_issuer")

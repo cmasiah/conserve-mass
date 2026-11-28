@@ -1,7 +1,7 @@
 """Industry: character skills, industry jobs, blueprints."""
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, UTCDateTime, utcnow
@@ -167,3 +167,15 @@ class MaterialTarget(Base):
     type_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     min_qty: Mapped[int | None] = mapped_column(BigInteger)
     max_qty: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class MarketPrice(Base):
+    """Jita 4-4 prices per item type, refreshed about hourly when something needs them
+    (bulk job values, collateral, fuel)."""
+    __tablename__ = "market_prices"
+
+    type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    jita_buy: Mapped[float | None] = mapped_column(Float)
+    jita_sell: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(16))      # fuzzwork | esi
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

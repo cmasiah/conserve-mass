@@ -46,7 +46,8 @@ def home(request: Request, db: Session = Depends(get_db)):
 def dashboard(request: Request, db: Session = Depends(get_db)):
     now = utcnow()
     not_blocked = Contract.issuer_id.not_in(
-        select(Customer.character_id).where(Customer.blocked.is_(True)))
+        select(Customer.character_id).where(Customer.blocked.is_(True))) & (
+        Contract.type == "courier")
     outstanding = db.scalars(select(Contract).where(Contract.status == "outstanding", not_blocked)
                              .order_by(Contract.date_issued)).all()
     in_progress = db.scalars(select(Contract).where(Contract.status == "in_progress", not_blocked)
@@ -61,13 +62,18 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     done_30d = db.execute(
         select(func.count(), func.coalesce(func.sum(Contract.reward_isk), 0),
                func.coalesce(func.sum(Contract.volume_m3), 0))
-        .where(Contract.status.in_(FINISHED), Contract.date_completed >= month_ago)
+        .where(Contract.status.in_(FINISHED), Contract.type == "courier",
+               Contract.date_completed >= month_ago)
     ).one()
     corp = corps_svc.home_corp(db)
     sync = db.get(SyncState, f"corp_contracts:{corp.corporation_id}") if corp else None
     pending = db.scalar(select(func.count()).select_from(Notification)
                         .where(Notification.status == "pending"))
+    from app.services import exposure
+    from app.web.routes.bulk import open_job_count
     return render(request, "dashboard.html", outstanding=outstanding, in_progress=in_progress,
+                  exposure=exposure.summary(db, now), top_exposure=exposure.top_exposure(db),
+                  open_jobs=open_job_count(db),
                   done_30d=done_30d, corp=corp, sync=sync, pending=pending, now=now,
                   bot_ready=bot.is_ready_for_dm(), bot_configured=bot.configured,
                   hidden_blocked=hidden_blocked, flagged=flagged,
@@ -77,7 +83,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 @router.get("/contracts")
 def contracts(request: Request, status: str = "open", q: str = "",
               db: Session = Depends(get_db)):
-    stmt = select(Contract).order_by(Contract.date_issued.desc())
+    stmt = select(Contract).where(Contract.type == "courier").order_by(Contract.date_issued.desc())
     if status == "open":
         stmt = stmt.where(Contract.status.in_(OPEN_STATUSES))
     elif status == "closed":
@@ -87,7 +93,9 @@ def contracts(request: Request, status: str = "open", q: str = "",
     if q:
         stmt = stmt.join(Customer).where(Customer.name.ilike(f"%{q}%"))
     rows = db.scalars(stmt.limit(500)).unique().all()
-    return render(request, "contracts.html", rows=rows, status=status, q=q, now=utcnow())
+    from app.web.routes.bulk import open_job_count
+    return render(request, "contracts.html", rows=rows, status=status, q=q, now=utcnow(),
+                  open_jobs=open_job_count(db))
 
 
 @router.get("/contracts/{contract_id}")
@@ -121,8 +129,19 @@ def contract_update(request: Request, contract_id: int, work_status: str = Form(
 @router.get("/customers")
 def customers(request: Request, sort: str = "completed", all: int = 0,
               db: Session = Depends(get_db)):
-    rows = customer_stats(db, order=sort, completed_only=not all)
-    return render(request, "customers.html", rows=rows, sort=sort, show_all=bool(all))
+    from app.services import exposure
+    extra = exposure.per_customer(db)
+    rows = customer_stats(db, order=sort, completed_only=False)
+    if not all:
+        # Customers: a delivered courier, or any bulk job.
+        rows = [s for s in rows if s.completed or extra.get(s.customer.character_id, {}).get("bulk_jobs")]
+    blank = {"exposure": 0.0, "hauled": 0.0, "bulk_jobs": 0, "bulk_m3": 0.0, "bulk_earned": 0.0}
+    if sort == "exposure":
+        rows.sort(key=lambda s: -extra.get(s.customer.character_id, blank)["exposure"])
+    elif sort == "hauled":
+        rows.sort(key=lambda s: -extra.get(s.customer.character_id, blank)["hauled"])
+    return render(request, "customers.html", rows=rows, sort=sort, show_all=bool(all),
+                  ext=extra, blank=blank)
 
 
 @router.get("/customers/{character_id}")
@@ -130,9 +149,18 @@ def customer_detail(request: Request, character_id: int, db: Session = Depends(g
     stats = customer_stats(db, character_id)
     if not stats:
         raise HTTPException(404)
-    rows = db.scalars(select(Contract).where(Contract.issuer_id == character_id)
+    rows = db.scalars(select(Contract).where(Contract.issuer_id == character_id,
+                                             Contract.type == "courier")
                       .order_by(Contract.date_issued.desc())).unique().all()
-    return render(request, "customer_detail.html", s=stats[0], rows=rows, now=utcnow())
+    from app.models import BulkJob
+    from app.services import exposure
+    jobs = db.scalars(select(BulkJob).where(BulkJob.issuer_id == character_id)
+                      .order_by(BulkJob.first_issued_at.desc())).all()
+    e = exposure.per_customer(db).get(character_id, {"exposure": 0.0, "hauled": 0.0,
+                                                     "bulk_jobs": 0, "bulk_m3": 0.0,
+                                                     "bulk_earned": 0.0})
+    return render(request, "customer_detail.html", s=stats[0], rows=rows, now=utcnow(),
+                  jobs=jobs, e=e)
 
 
 @router.post("/customers/{character_id}")

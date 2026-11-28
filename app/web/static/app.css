@@ -451,3 +451,12 @@ td.held .tip-row { grid-template-columns: 1fr auto 50px; white-space: normal; }
 .slotcell .nums { display: flex; align-items: baseline; gap: 4px; }
 .remote-tag { margin-left: auto; font-size: 12px; cursor: help; }
 .remote-tag.queued { opacity: .4; }   /* in the skill queue, not trained yet */
+
+/* Hauling dashboard: exposure over the last 30 days */
+.exposure-card { margin: 12px 0 18px; }
+.exp-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.exp-bars { display: flex; align-items: flex-end; gap: 3px; height: 70px; }
+.exp-bar { flex: 1; background: var(--accent); opacity: .75; border-radius: 2px 2px 0 0; min-height: 1px; }
+.exp-bar:hover { opacity: 1; }
+.exp-top { margin-top: 8px; color: var(--muted); }
+.exp-top a { color: var(--text); }
