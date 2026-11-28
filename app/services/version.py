@@ -38,6 +38,7 @@ class VersionInfo:
     channel: str = CHANNEL
     current_sha: str = GIT_SHA
     latest_sha: str | None = None   # beta: head commit of the beta branch
+    builds: list[dict] = field(default_factory=list)   # recent images you can switch to
 
     @property
     def newer(self) -> bool:
@@ -106,6 +107,45 @@ async def image_published(client: httpx.AsyncClient, repo: str, tag: str) -> boo
     return r.status_code == 200
 
 
+MAX_BUILDS = 8
+_TAG_RE = re.compile(r"^(sha-[0-9a-f]{40}|\d+\.\d+\.\d+)$")
+
+
+def valid_rollback_tag(tag: str) -> bool:
+    """Only exact image tags: sha-<40 hex> (a beta build) or 1.2.3 (a release)."""
+    return bool(_TAG_RE.match(tag or ""))
+
+
+async def _ghcr_tags(client: httpx.AsyncClient, repo: str) -> list[str]:
+    path = repo.lower()
+    t = await client.get("https://ghcr.io/token", params={"scope": f"repository:{path}:pull"})
+    if t.status_code != 200:
+        return []
+    r = await client.get(f"https://ghcr.io/v2/{path}/tags/list", params={"n": 1000},
+                         headers={"Authorization": f"Bearer {t.json().get('token', '')}"})
+    return r.json().get("tags", []) if r.status_code == 200 else []
+
+
+async def recent_builds(client: httpx.AsyncClient, repo: str, commits: list[dict]) -> list[dict]:
+    """Images you can roll back to.
+    beta: the last few beta commits whose sha-<commit> image exists.
+    stable: the newest released version tags."""
+    tags = set(await _ghcr_tags(client, repo))
+    if CHANNEL == "beta":
+        out = []
+        for c in commits:
+            tag = f"sha-{c.get('full_sha', '')}"
+            if tag in tags:
+                out.append({"tag": tag, "label": f"{c['sha']}", "message": c["message"],
+                            "date": c["date"], "url": c["url"],
+                            "current": c.get("full_sha") == GIT_SHA})
+        return out[:MAX_BUILDS]
+    versions = sorted((t for t in tags if re.match(r"^\d+\.\d+\.\d+$", t)),
+                      key=parse_version, reverse=True)[:MAX_BUILDS]
+    return [{"tag": v, "label": v, "message": "", "date": None, "url": None,
+             "current": v == APP_VERSION} for v in versions]
+
+
 async def check(force: bool = False) -> VersionInfo:
     global _cache
     if (not force and _cache.checked_at
@@ -114,7 +154,8 @@ async def check(force: bool = False) -> VersionInfo:
 
     repo = get_settings().update_repo
     info = VersionInfo(latest=_cache.latest, commits=_cache.commits,
-                       image_ready=_cache.image_ready, latest_sha=_cache.latest_sha)
+                       image_ready=_cache.image_ready, latest_sha=_cache.latest_sha,
+                       builds=_cache.builds)
     headers = {"User-Agent": get_settings().user_agent}
     try:
         async with httpx.AsyncClient(timeout=10, headers=headers) as client:
@@ -134,6 +175,7 @@ async def check(force: bool = False) -> VersionInfo:
                     info.latest_sha = data[0]["sha"].lower()
                 info.commits = [{
                     "sha": x["sha"][:7],
+                    "full_sha": x["sha"].lower(),
                     "message": x["commit"]["message"].splitlines()[0][:140],
                     "date": datetime.fromisoformat(
                         x["commit"]["committer"]["date"].replace("Z", "+00:00")),
@@ -145,6 +187,7 @@ async def check(force: bool = False) -> VersionInfo:
                 info.image_ready = await image_published(client, repo, tag)
             else:
                 info.image_ready = False
+            info.builds = await recent_builds(client, repo, info.commits)
     except (httpx.HTTPError, KeyError, ValueError) as e:
         info.error = f"Couldn't reach GitHub: {e}"
         log.warning("Version check failed: %s", e)

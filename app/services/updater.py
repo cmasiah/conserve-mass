@@ -3,8 +3,10 @@
 The app never touches Docker. It only drops a request file in /config; the
 watcher on the host sees it, runs update.sh (pull + restart) and writes the
 result back. Files (all in the config dir):
-  update-requested   created by the app, removed by the watcher
-  updater-heartbeat  touched by the watcher every run (proves it's installed)
+  update-requested   created by the app, removed by the watcher. May name a specific
+                     image tag (tag=sha-<commit> or tag=1.2.3) to roll back to.
+  updater-heartbeat  touched by the watcher every run (proves it's installed); newer
+                     watchers write their version into it ("watcher=2" can roll back)
   update-status      key=value result of the last run
   update-last.log    output of the last run
 """
@@ -22,9 +24,13 @@ def _dir() -> Path:
     return get_settings().config_dir
 
 
+ROLLBACK_WATCHER = 2   # first host-watcher version that understands tag=
+
+
 @dataclass
 class UpdaterStatus:
     installed: bool
+    watcher_version: int
     last_seen: datetime | None
     pending: bool
     requested_at: datetime | None
@@ -45,6 +51,11 @@ def _mtime(p: Path) -> datetime | None:
 def status() -> UpdaterStatus:
     d = _dir()
     hb = _mtime(d / "updater-heartbeat")
+    try:
+        raw = (d / "updater-heartbeat").read_text()
+        watcher_version = int(raw.split("watcher=", 1)[1].split()[0]) if "watcher=" in raw else 1
+    except (OSError, ValueError, IndexError):
+        watcher_version = 1
     kv: dict[str, str] = {}
     try:
         for line in (d / "update-status").read_text().splitlines():
@@ -60,6 +71,7 @@ def status() -> UpdaterStatus:
         log_tail = ""
     return UpdaterStatus(
         installed=bool(hb and utcnow() - hb < ACTIVE_WITHIN),
+        watcher_version=watcher_version,
         last_seen=hb,
         pending=(d / "update-requested").exists(),
         requested_at=_mtime(d / "update-requested"),
@@ -71,6 +83,9 @@ def status() -> UpdaterStatus:
     )
 
 
-def request_update(requested_by: str) -> None:
-    (_dir() / "update-requested").write_text(
-        f"requested_at={utcnow().isoformat()}\nby={requested_by}\n")
+def request_update(requested_by: str, tag: str | None = None) -> None:
+    """Ask the host watcher to update; with `tag`, to switch to that exact image."""
+    body = f"requested_at={utcnow().isoformat()}\nby={requested_by}\n"
+    if tag:
+        body += f"tag={tag}\n"
+    (_dir() / "update-requested").write_text(body)

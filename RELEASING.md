@@ -51,7 +51,14 @@ Squash and merge it, and let the beta build finish (green ✓).
 
 Nothing to sync back: `beta` already has everything. Keep working on `beta`.
 
-## If a release is bad
+## If a build is bad
 
-Stable installs can pin the previous image (`CMASS_IMAGE_TAG=0.5.0`) while a fix goes
-through beta and out as the next patch version (`0.6.1`). Don't force-push `main`.
+**System → Recent builds · roll back** lists the last few published builds (beta: recent
+beta commits; stable: recent versions). **Roll back to this** restarts on that exact
+image. It lasts until the next **Update now**, which returns to the newest build.
+(Needs the host updater; the first normal update after this feature installs the newer
+updater script that understands rollbacks.)
+
+From a terminal: `bash update.sh sha-<full commit id>` or `bash update.sh 0.5.0`.
+To stay on an old build permanently, pin it in `.env` (`CMASS_IMAGE_TAG=0.5.0`) while a
+fix goes through beta and out as the next patch version (`0.6.1`). Don't force-push `main`.

@@ -2,6 +2,9 @@
 # Pull the newest published image and restart. Config, .env and database are untouched.
 # If the new version doesn't come up healthy within 3 minutes, roll back automatically.
 # Usage (Unraid terminal):  bash /mnt/user/appdata/conserve-mass-src/update.sh
+# Roll back to one build:   bash .../update.sh sha-<full commit id>   (or a version: 0.5.0)
+#   That pins the image only for this run; the next plain update returns to the channel
+#   set in .env.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -15,8 +18,17 @@ case "$TAG" in
     beta) BRANCH=beta ;;
     *)    BRANCH=main ;;
 esac
-IMAGE=ghcr.io/cmasiah/conserve-mass:$TAG
 echo "==> Channel: $TAG (scripts from the $BRANCH branch)"
+PIN=${1:-}
+if [ -n "$PIN" ]; then
+    if ! [[ "$PIN" =~ ^(sha-[0-9a-f]{40}|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+        echo "!! Not an image tag this script will switch to: $PIN"; exit 2
+    fi
+    echo "==> Switching to the exact build $PIN (until the next normal update)"
+    TAG=$PIN
+    export CMASS_IMAGE_TAG=$PIN   # overrides .env for this run's docker compose calls
+fi
+IMAGE=ghcr.io/cmasiah/conserve-mass:$TAG
 
 # Keep this folder's compose file / scripts in sync with GitHub (no git needed).
 RAW=https://raw.githubusercontent.com/cmasiah/conserve-mass/$BRANCH
