@@ -330,25 +330,24 @@ button.tgl:hover { border-color: var(--accent-2); }
 
 /* Slots: Capital Construction cell */
 .tip.capcell { display: inline-flex; align-items: center; gap: 8px; cursor: help; white-space: nowrap; }
-/* Capital Construction tiers: light green -> deep, bold green */
+/* Capital Construction tiers: plain text -> light green -> green -> bold green pill */
 .tier { font-size: 13px; }
-.tier-1, .tier-2 { color: #a6e3b0; font-weight: 500; }
-.tier-3 { color: #6fd283; font-weight: 600; }
+.tier-1, .tier-2 { color: var(--text); font-weight: 400; }
+.tier-3 { color: #a6e3b0; font-weight: 500; }
 .tier-4 { color: #3fb950; font-weight: 700; }
 .tier-5 { color: #fff; font-weight: 800; letter-spacing: .02em; background: #1f7a32;
   padding: 1px 8px; border-radius: 999px; box-shadow: 0 0 8px rgba(63,185,80,.45); }
 .tip-row .tier { font-size: 12px; }
-/* Slots: 10+ is the gold standard; fewer is a training target */
-.tip.slotcell.gold .cap-n { color: #e8c35a; font-weight: 700; }
-.tip.slotcell.gold { box-shadow: inset 3px 0 0 #e8c35a; }
-.tip.slotcell.short { background: rgba(232,140,60,.07); box-shadow: inset 3px 0 0 rgba(232,140,60,.55); }
-.tip.slotcell.short .cap-n { color: #f0a868; font-weight: 600; }
-.gold-badge { color: #e8c35a; font-weight: 700; margin-left: 6px; }
-.short-note { color: #f0a868; font-weight: 500; margin-left: 6px; }
-.slot-filters { flex-wrap: wrap; align-items: center; }
-.tab-group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #e8c35a;
-  margin: 0 2px 0 10px; }
-.tab-group.short-label { color: #f0a868; }
+/* Slots: under 10 of a kind is a (gentle) training target */
+.tip.slotcell.short { background: rgba(232,140,60,.035); box-shadow: inset 2px 0 0 rgba(232,140,60,.3); }
+.tip.slotcell.short .cap-n { color: #e9b48a; }
+.slot-filters { flex-wrap: wrap; align-items: center; gap: 8px; }
+.tab-box { display: inline-flex; align-items: center; gap: 2px; padding: 3px 4px 3px 8px;
+  border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.025); }
+.tab-box:last-child { padding-left: 4px; }
+.tab-box.short-box { background: rgba(232,140,60,.035); border-color: rgba(232,140,60,.22); }
+.tab-group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  margin-right: 4px; }
 .slots-table th a { color: inherit; display: inline-flex; gap: 4px; align-items: center; }
 .slots-table th.sorted { color: var(--text); }
 .sort-arrow { font-size: 10px; opacity: .7; }

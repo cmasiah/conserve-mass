@@ -6,6 +6,7 @@
   <h1 style="margin:0">Discord notifications</h1>
   <span class="spacer"></span>
   <a class="btn" href="/system" title="System → Send Test Message (always sends)">Send a test DM…</a>
+  <button form="notify-form" class="primary save-top">Save preferences</button>
 </div>
 <p class="muted small" style="margin-top:0">Pick which DMs you get. Switching one off stops new alerts of that kind; anything
   already sent is unaffected. Several alerts of the same kind arriving together still come as one digest message.
@@ -22,7 +23,7 @@
         <button type="button" class="small subtle" data-all="1">All on</button>
         <button type="button" class="small subtle" data-all="0">All off</button>
       </div>
-      {% for k, on in items %}
+      {% for k, on in items if k.key != 'industry_job_ready' %}
         <label class="switch-row">
           <input type="checkbox" class="switch" name="kind_{{ k.key }}" value="1" {{ 'checked' if on }}>
           <span><strong>{{ k.label }}</strong>{% if k.help %}<span class="small muted">{{ k.help }}</span>{% endif %}</span>
@@ -30,9 +31,14 @@
       {% endfor %}
 
       {% if group == 'Industry' %}
+        {% set watched = items | selectattr('0.key', 'equalto', 'industry_job_ready') | list %}
         <div class="watch">
-          <div class="watch-title">Watch these when they're built</div>
-          <div class="small muted">For <em>Watched ship or item built</em>. Only manufacturing jobs; research has its own switch above.</div>
+          {% for k, on in watched %}
+          <label class="switch-row watch-switch">
+            <input type="checkbox" class="switch" name="kind_{{ k.key }}" value="1" {{ 'checked' if on }}>
+            <span><strong>{{ k.label }}</strong><span class="small muted">A manufacturing job for anything picked below is ready for delivery.</span></span>
+          </label>
+          {% endfor %}
           <div class="chip-toggles">
             {% for key, label, help, on in rules %}
               <label class="chip-toggle" title="{{ help }}">

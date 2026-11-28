@@ -135,3 +135,16 @@ def test_settings_page_renders_groups_switches_and_keywords(db):
     finally:
         app.router.routes[:] = [r for r in app.router.routes
                                 if getattr(r, "path", "") != "/__test/login4"]
+
+
+def test_contract_updates_are_two_combined_switches(db):
+    from app.services import prefs
+    labels = [sw.label for sw in prefs.SWITCHES if sw.group == "Hauling"]
+    assert labels == ["New courier received", "Unaccepted contract expiring soon",
+                      "Delivery deadline approaching", "Contract accepted, delivered, or failed",
+                      "Contract cancelled, deleted, or rejected"]
+    prefs.save(db, {"kind_status_progress": "1"})          # closed group left off
+    for k in ("status_accepted", "status_finished", "status_failed"):
+        assert prefs.is_enabled(db, k)
+    for k in ("status_cancelled", "status_deleted", "status_rejected"):
+        assert not prefs.is_enabled(db, k)
