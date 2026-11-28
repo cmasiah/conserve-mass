@@ -1,0 +1,41 @@
+{#- Copy-to-clipboard for `Name Quantity` lists. Works on plain-http LAN addresses too
+    (navigator.clipboard needs https, so it falls back to a selected textarea). -#}
+{% macro copy_button(text, label="Copy to clipboard", cls="") -%}
+<span class="clip">
+  <textarea class="clip-src" readonly aria-hidden="true" tabindex="-1">{{ text }}</textarea>
+  <button type="button" class="{{ cls }}" data-copy {{ 'disabled' if not text }}
+          title="{{ (text.count('\n') + 1) if text else 0 }} lines, `Name Quantity` (Janice / Ravworks / multibuy)">📋 {{ label }}</button>
+</span>
+{%- endmacro %}
+
+{% macro clip_script() -%}
+<script>
+(() => {
+  if (window.__clip) return; window.__clip = true;
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-copy]'); if (!btn) return;
+    const src = btn.parentElement.querySelector('.clip-src'); const text = src.value;
+    let ok = false;
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; } } catch (_) {}
+    if (!ok) { src.style.display = 'block'; src.select(); try { ok = document.execCommand('copy'); } catch (_) {} src.style.display = ''; }
+    const old = btn.textContent; btn.textContent = ok ? '✓ Copied' : 'Copy failed: select the text manually';
+    btn.classList.toggle('copied', ok); setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1800);
+  });
+})();
+</script>
+{%- endmacro %}
+
+{% macro watch_btn(csrf, kind, target, label, watched, back, owner_id=0, division="", covered_by="") -%}
+{%- if covered_by and not watched -%}
+<span class="star inherited" title="Already counted: {{ covered_by }} is watched">★</span>
+{%- else -%}
+<form class="inline watch-form" method="post" action="/industry/assets/watch">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ kind }}">
+  <input type="hidden" name="target" value="{{ target }}"><input type="hidden" name="owner_id" value="{{ owner_id }}">
+  <input type="hidden" name="division" value="{{ division }}"><input type="hidden" name="label" value="{{ label }}">
+  <input type="hidden" name="back" value="{{ back }}">
+  <button class="star {{ 'on' if watched }}" title="{{ 'Stop watching' if watched else 'Watch for stockpiles' }}: {{ label }}"
+          aria-pressed="{{ 'true' if watched else 'false' }}">{{ '★' if watched else '☆' }}</button>
+</form>
+{%- endif -%}
+{%- endmacro %}

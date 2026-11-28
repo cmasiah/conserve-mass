@@ -19,6 +19,8 @@
   'slots': '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   'jobs': '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
   'blueprints': '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  'assets': '<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/>',
+  'materials': '<path d="M5 20h14"/><path d="M7 20v-6h4v6M13 20V8h4v12"/><path d="M7 11l2-3 2 3"/>',
   'characters': '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.5 4.2-7 8-7s7 2.5 8 7"/>',
   'notifications': '<path d="M6 16V11a6 6 0 0112 0v5l2 2H4z"/><path d="M10 20a2 2 0 004 0"/>',
   'system': '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
@@ -65,6 +67,8 @@
       {{ item('/industry/slots', 'Slots', 'slots', p.startswith('/industry/slots')) }}
       {{ item('/industry/jobs', 'Jobs', 'jobs', p.startswith('/industry/jobs')) }}
       {{ item('/industry/blueprints', 'Blueprints', 'blueprints', p.startswith('/industry/blueprints')) }}
+      {{ item('/industry/assets', 'Assets', 'assets', p.startswith('/industry/assets')) }}
+      {{ item('/industry/materials', 'Materials', 'materials', p.startswith('/industry/materials')) }}
     {% endcall %}
 
     {# named nav_update so it can't shadow page variables such as `upd` on the System page #}

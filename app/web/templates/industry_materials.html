@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% from "partials/sync.html" import sync_now %}
+{% from "partials/clip.html" import copy_button, clip_script %}
+{% block title %}Materials · {{ APP_NAME }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/assets.css?v={{ ASSET_V }}">{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1 style="margin:0">Materials</h1>
+  <div class="tabs">
+    <a href="?scope=watched" class="{{ 'active' if scope != 'all' }}">Watched places <span class="tab-n">{{ watch_count }}</span></a>
+    <a href="?scope=all" class="{{ 'active' if scope == 'all' }}">All assets</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="btn" href="/industry/assets">← Assets</a>
+  {{ sync_now(sync_feeds, "/industry/sync-now", csrf, now, back="/industry/materials") }}
+</div>
+
+{% if scope != 'all' and not watch_count %}
+  <div class="flash">No places are watched yet. On the <a href="/industry/assets">Assets</a> page, click ☆ next to a
+    system, structure, division or container in AC2E-3 (or anywhere) to count it here.</div>
+{% endif %}
+
+<div class="grid mat-lists">
+  <div class="card mat-list">
+    <div class="mat-list-head"><strong>Shopping list</strong> <span class="pill {{ 'warn' if shopping else 'ok' }} small">{{ shopping | length }}</span>
+      <span class="spacer"></span>{{ copy_button(clip_shop, "Copy", "small") }}</div>
+    <div class="small muted">Below minimum: how much to buy to get back to it.</div>
+    {% for name, n in shopping[:8] %}<div class="mat-row"><span>{{ name }}</span><span class="num">{{ '{:,}'.format(n) }}</span></div>{% endfor %}
+    {% if shopping | length > 8 %}<div class="small muted">+{{ shopping | length - 8 }} more (all copied)</div>{% endif %}
+  </div>
+  <div class="card mat-list">
+    <div class="mat-list-head"><strong>Sell list</strong> <span class="pill {{ 'info' if selling else 'ok' }} small">{{ selling | length }}</span>
+      <span class="spacer"></span>{{ copy_button(clip_sell, "Copy", "small") }}</div>
+    <div class="small muted">Above maximum: the excess you could sell.</div>
+    {% for name, n in selling[:8] %}<div class="mat-row"><span>{{ name }}</span><span class="num">{{ '{:,}'.format(n) }}</span></div>{% endfor %}
+    {% if selling | length > 8 %}<div class="small muted">+{{ selling | length - 8 }} more (all copied)</div>{% endif %}
+  </div>
+  <div class="card mat-list">
+    <div class="mat-list-head"><strong>Stockpile</strong><span class="spacer"></span>{{ copy_button(clip_all, "Copy all", "small primary") }}</div>
+    <div class="small muted">Every material below, as <code>Name Quantity</code> lines for Janice, Ravworks or your own tool.
+      Plain-text links: <a href="/industry/materials/export.txt?scope={{ scope }}">all</a> ·
+      <a href="/industry/materials/export.txt?list=shopping&scope={{ scope }}">shopping</a> ·
+      <a href="/industry/materials/export.txt?list=sell&scope={{ scope }}">sell</a></div>
+  </div>
+</div>
+
+<form method="post" action="/industry/materials/targets" id="targets">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="scope" value="{{ scope }}">
+  <div class="toolbar">
+    <span class="small muted">Min / Max accept plain numbers or 10k, 2.5m, 1b. Leave both empty for no target.</span>
+    <span class="spacer"></span>
+    <button class="primary">Save stock levels</button>
+  </div>
+  {% for group, lines in sections.items() %}
+    <section class="fold open">
+      <button type="button" class="fold-head">
+        <svg class="fold-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        <span class="fold-title">{{ group }}</span><span class="pill small">{{ lines | length }}</span>
+        {% set short = lines | selectattr('short') | list %}{% set over = lines | selectattr('excess') | list %}
+        {% if short %}<span class="pill warn small">{{ short | length }} below min</span>{% endif %}
+        {% if over %}<span class="pill info small">{{ over | length }} above max</span>{% endif %}
+      </button>
+      <div class="fold-body">
+        <table class="sortable mat-table">
+          <thead><tr><th data-sort="text">Item</th><th data-sort="num" class="num">In stock</th>
+            <th class="num">Min</th><th class="num">Max</th><th data-sort="num">Status</th></tr></thead>
+          <tbody>
+          {% for ln in lines %}
+            <tr class="{{ 'low' if ln.short else ('high' if ln.excess else '') }}">
+              <td><img src="https://images.evetech.net/types/{{ ln.type_id }}/icon?size=32" width="20" height="20" alt="" loading="lazy"> {{ ln.name }}</td>
+              <td class="num" data-v="{{ ln.quantity }}">{{ '{:,}'.format(ln.quantity) }}</td>
+              <td class="num"><input class="qty" name="min_{{ ln.type_id }}" value="{{ '{:,}'.format(ln.min_qty) if ln.min_qty is not none else '' }}" inputmode="numeric" placeholder="—"></td>
+              <td class="num"><input class="qty" name="max_{{ ln.type_id }}" value="{{ '{:,}'.format(ln.max_qty) if ln.max_qty is not none else '' }}" inputmode="numeric" placeholder="—"></td>
+              <td data-v="{{ ln.short or (-ln.excess) }}">
+                {% if ln.short %}<span class="pill warn small">buy {{ '{:,}'.format(ln.short) }}</span>
+                {% elif ln.excess %}<span class="pill info small">sell {{ '{:,}'.format(ln.excess) }}</span>
+                {% elif ln.min_qty or ln.max_qty is not none %}<span class="pill ok small">ok</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% else %}
+    <p class="muted">No materials {{ 'in watched places' if scope != 'all' else 'in any assets' }} yet.</p>
+  {% endfor %}
+  {% if sections %}<div class="toolbar"><span class="spacer"></span><button class="primary">Save stock levels</button></div>{% endif %}
+</form>
+<script src="/static/tables.js?v={{ ASSET_V }}"></script>
+{{ clip_script() }}
+{% endblock %}

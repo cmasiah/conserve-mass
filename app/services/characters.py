@@ -34,8 +34,8 @@ TOGGLES = (
            "blueprints aren't affected. Turning it off clears its personal ones.",
            (CHAR_JOBS, CHAR_BPS)),
     Toggle("assets", "Assets",
-           "Include this character's own assets. Asset tracking isn't built yet; this "
-           "choice applies once it is.", (ASSETS,)),
+           "Sync this character's own assets (hourly) for Industry › Assets and "
+           "Materials. Corp hangars come through a Director+ character instead.", (ASSETS,)),
 )
 BY_KEY = {t.key: t for t in TOGGLES}
 

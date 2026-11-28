@@ -69,6 +69,8 @@ def _feeds(kind: str) -> list[Feed]:
         Feed("Blueprints", "industry_blueprints",
              timedelta(minutes=s.industry_blueprints_poll_minutes), "1 hour", ("bps:", "divisions:"),
              esi_window=timedelta(hours=1)),
+        Feed("Assets", "industry_assets", timedelta(minutes=s.assets_poll_minutes), "1 hour",
+             ("assetsync:",), esi_window=timedelta(hours=1)),
     ]
 
 
@@ -159,10 +161,15 @@ def expected_per_hour(db: Session) -> list[Expected]:
                  _per_hour(jobs_poll, timedelta(minutes=5))),
         Expected("Blueprints", "per character", n(CHAR_BPS, "industry"),
                  _per_hour(bps_poll, timedelta(hours=1)), "+1 per extra page of 1000"),
-        Expected("Corp jobs + blueprints", "director",
+        Expected("Assets", "per character", n("esi-assets.read_assets.v1", "assets"),
+                 _per_hour(timedelta(minutes=s.assets_poll_minutes), timedelta(hours=1)),
+                 "+1 per extra page of 1000"),
+        Expected("Corp jobs, blueprints + assets", "director",
                  1 if any(c.token and c.token.is_valid and
                           "esi-industry.read_corporation_jobs.v1" in c.token.scope_set
                           for c in chars) else 0,
-                 _per_hour(jobs_poll, timedelta(minutes=5)) + _per_hour(bps_poll, timedelta(hours=1))),
+                 _per_hour(jobs_poll, timedelta(minutes=5)) + _per_hour(bps_poll, timedelta(hours=1))
+                 + _per_hour(timedelta(minutes=s.assets_poll_minutes), timedelta(hours=1)),
+                 "+1 per extra page of 1000 assets"),
     ]
     return [r for r in rows if r.count]

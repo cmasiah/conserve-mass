@@ -16,7 +16,7 @@ from app.esi.client import close_client
 from app.jobs import scheduler
 from app.logbuffer import setup_logging
 from app.security import LoginRequired
-from app.web.routes import auth, industry, logs, pages, settings as settings_routes
+from app.web.routes import assets as assets_routes, auth, industry, logs, pages, settings as settings_routes
 from app.web.templating import templates
 
 settings = get_settings()
@@ -127,4 +127,5 @@ app.include_router(auth.router)
 app.include_router(pages.router)
 app.include_router(logs.router)
 app.include_router(industry.router)
+app.include_router(assets_routes.router)
 app.include_router(settings_routes.router)

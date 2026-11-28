@@ -1,0 +1,42 @@
+/* Industry › Assets and Materials (only loaded there) */
+.assets-layout { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .assets-layout { grid-template-columns: 1fr; } }
+.places { position: sticky; top: 12px; max-height: calc(100vh - 40px); overflow: auto; padding: 12px; }
+.places-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.place-sys { position: relative; margin-bottom: 6px; }
+.place-sys .fold-head { padding-right: 36px; }
+.sys-watch { position: absolute; right: 8px; top: 6px; }
+.place-site { margin: 2px 0 2px 4px; }
+.place-site > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 3px 0; list-style: none; }
+.place-site > summary::-webkit-details-marker { display: none; }
+.place-site > summary::before { content: "▸"; color: var(--muted); font-size: 11px; width: 10px; }
+.place-site[open] > summary::before { content: "▾"; }
+.place-owner, .place-cont { display: flex; align-items: center; gap: 6px; padding: 2px 0 2px 26px; font-size: 13px; }
+.place-cont { padding-left: 46px; }
+.places a { color: var(--text); text-decoration: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.places a:hover { color: var(--accent-2); }
+.places a.sel { color: var(--accent); font-weight: 600; }
+.watch-form { margin: 0; display: inline; }
+button.star { background: none; border: 0; padding: 0 2px; font-size: 15px; line-height: 1; color: var(--muted); cursor: pointer; }
+button.star:hover { color: var(--accent); }
+button.star.on { color: var(--accent); }
+.star-pad { display: inline-block; width: 19px; }
+.items-filter { gap: 8px; flex-wrap: wrap; }
+.items-filter input[type=search] { min-width: 260px; }
+.check { display: inline-flex; gap: 6px; align-items: center; }
+.scope { margin: 0 0 8px; }
+.assets-table td img, .mat-table td img { vertical-align: middle; border-radius: 3px; }
+table.assets-table, table.mat-table { overflow: visible; }
+.clip { display: inline-flex; }
+.clip-src { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+button.copied { border-color: var(--ok); color: var(--ok); }
+.mat-lists { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-bottom: 16px; }
+.mat-list-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.mat-row { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; border-top: 1px solid var(--line); }
+input.qty { width: 120px; text-align: right; padding: 3px 6px; }
+.mat-table tr.low td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.mat-table tr.high td:first-child { box-shadow: inset 3px 0 0 var(--accent-2); }
+.star.inherited { color: var(--accent); opacity: .4; padding: 0 2px; font-size: 15px; cursor: help; }
+.mat-table { table-layout: fixed; width: 100%; }
+.mat-table th:nth-child(1) { width: 38%; } .mat-table th:nth-child(2) { width: 18%; }
+.mat-table th:nth-child(3), .mat-table th:nth-child(4) { width: 15%; } .mat-table th:nth-child(5) { width: 14%; }
