@@ -75,15 +75,38 @@ def test_profile_applies_skills_fit_and_overrides(db):
     assert (p.ship_name, p.economizers, p.ore, p.t2, p.fit_source) == ("Nomad", 1, 1, 1, "assets")
     assert p.range_ly == pytest.approx(10.0)                       # 5 × (1 + 0.2×5)
     assert p.fuel_per_ly == pytest.approx(10000 * 0.5 * 0.6 * 0.9)  # JFC5, JF4, 1 economizer
-    assert p.cargo_m3 == pytest.approx(100000 * 1.25 * 1.275 * 1.275)  # racial 5, ORE + T2
+    assert p.cargo_m3 == pytest.approx(100000 * 1.25 * 1.29 * 1.275)  # racial 5, ORE + T2
     assert p.fuel_name == "Hydrogen Isotopes"
     jp.fuel_override, jp.economizers, jp.expanders, jp.t2_expanders = 2500, 3, 0, 0
     p = jump.profile(db, jp, db.get(Character, 1), jump.bonuses(db))
     assert p.fuel_per_ly == 2500 and "fuel_per_ly" in p.overridden and p.fit_source == "manual"
     assert p.cargo_m3 == pytest.approx(100000 * 1.25)
     # Leg-specific numbers for the packing ledger: loaded with 3 ORE, empty with 3 economizers.
-    assert p.cargo_with(3) == pytest.approx(100000 * 1.25 * 1.275 ** 3)
+    assert p.cargo_with(3) == pytest.approx(100000 * 1.25 * 1.29 ** 3)
     assert p.fuel_with(3) == pytest.approx(10000 * 0.5 * 0.6 * 0.9 ** 3)
+
+
+def test_nomad_with_three_ore_expanders_matches_the_game():
+    """In game: Nomad, Minmatar Freighter V, 3x ORE Expanded Cargohold = 354,203.7 m3;
+    three economizers carried for the trip back take 3 x 3,500 m3 of it."""
+    from app.services.jump import BONUS_DEFAULTS, Profile
+    p = Profile(1, "JF", ship_name="Nomad", hull_cargo=132_000 * 1.25, hull_fuel=1000,
+                range_ly=10, fuel_per_ly=1000, ore=3, bonus=dict(BONUS_DEFAULTS))
+    p.cargo_m3 = p.cargo_with(3)
+    assert p.cargo_m3 == pytest.approx(354_203.7, abs=0.1)
+    assert p.carried_econ == 3 and p.hold_m3 == pytest.approx(343_703.7, abs=0.1)
+    assert p.empty_fuel_per_ly == pytest.approx(1000 * 0.9 ** 3)
+    assert p.for_leg("empty").fuel_per_ly == pytest.approx(729) and p.for_leg("loaded") is p
+
+
+def test_old_wrong_defaults_are_replaced_unless_from_game_data(db):
+    from app.services import jump
+    jump.save_bonuses(db, {"ore_expander_cargo": 0.275, "economizer_volume": 10500,
+                           "economizer_fuel": 0.10})
+    b = jump.bonuses(db)
+    assert b["ore_expander_cargo"] == 0.29 and b["economizer_volume"] == 3500
+    jump._set_json(db, "jump:module_source", {"economizer_volume": "10,500 m³"})
+    assert jump.bonuses(db)["economizer_volume"] == 10500     # game data wins
 
 
 # ------------------------------------------------------------------ routing
@@ -232,6 +255,64 @@ def test_route_page_shows_legs_fuel_and_cost(client):
     assert hits[0]["name"] == "AC2E-3" and hits[0]["region"] == "Fountain"
 
 
+def test_trip_modes_plan_each_leg_with_its_own_fit(client, monkeypatch):
+    import json
+    import re
+
+    from app.services import jump as svc
+
+    async def paths(origins, dest):          # ESI /route: 2 gates from each candidate
+        return {o: [o, 99, dest] for o in origins}
+    monkeypatch.setattr(svc, "gate_paths", paths)
+    fuel_of = lambda html: [int(v.replace(",", "")) for v in re.findall(
+        r'kpi-v">([\d,]+)</span>\s*<span class="kpi-l">(?:📦 loaded|⛽ empty)', html)]
+    loaded = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=loaded").text
+    empty = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=empty").text
+    rt = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=empty_loaded").text
+    (fl,), (fe,) = fuel_of(loaded), fuel_of(empty)
+    assert fe < fl
+    out, back = fuel_of(rt)                        # empty out, loaded back
+    assert out == fe and back > 0 and "round trip" in rt
+    assert "AC2E-3 → Jita" in rt                 # the return leg is planned on its own
+    # The map's data and the steps are embedded for the browser.
+    data = json.loads(re.search(r'id="jmap-data" type="application/json">(.*?)</script>',
+                                rt, re.S).group(1))
+    assert len(data["legs"]) == 2 and data["legs"][0]["fit"] == "empty"
+    steps = json.loads(re.search(r'id="jmap-steps" type="application/json">(.*?)</script>',
+                                 rt, re.S).group(1))
+    assert steps[0]["kind"] == "jump" and steps[0]["role"].startswith("mid")
+    assert any(st["role"] == "destination" for st in steps)
+    assert "Step by step" in rt and "Jump to" in rt
+    assert any(st["kind"] == "gates" and st["gates"] == 2 for st in steps)   # into Jita
+
+
+def test_old_leg_parameter_still_works(client):
+    assert "⛽ empty" in client.get("/jump?tab=route&frm=jita&to=ac2e-3&leg=empty").text
+
+
+def test_map_data_north_up_gates_and_borders(world):
+    from app.models import MapGate, MapSystem
+    from app.services.jump import Leg, Route, map_data
+    a = MapSystem(system_id=91, name="North", constellation_id=1, region_id=7, security=-0.5,
+                  x=0.0, y=0.0, z=9.46e16)
+    b = MapSystem(system_id=92, name="South", constellation_id=2, region_id=7, security=-0.5,
+                  x=9.46e16, y=0.0, z=-9.46e16)
+    world.add_all([a, b, MapGate(from_id=91, to_id=92), MapGate(from_id=92, to_id=91)])
+    world.commit()
+    m = map_data(world, [("North → South", "loaded", Route(a, b, legs=[Leg(a, b, 20.0, 100)]))], 10)
+    nodes = {n["n"]: n for n in m["nodes"]}
+    assert nodes["North"]["y"] < nodes["South"]["y"] and nodes["North"]["x"] < nodes["South"]["x"]
+    assert m["gates"] == [[m["nodes"].index(nodes["North"]), m["nodes"].index(nodes["South"]), 1]]
+    assert m["legs"][0]["jumps"][0][2] == 20.0 and m["has_gates"]
+
+
+def test_gates_csv_is_read_both_ways():
+    from app.services.jump import parse_gates_csv
+    text = ("fromRegionID,fromConstellationID,fromSolarSystemID,toSolarSystemID,"
+            "toConstellationID,toRegionID\n1,2,30000001,30000002,2,1\nbad,row\n")
+    assert parse_gates_csv(text) == {(30000001, 30000002), (30000002, 30000001)}
+
+
 def test_pilots_and_cyno_pages(client, world):
     from app.models import CynoPoint
     html = client.get("/jump?tab=pilots").text
@@ -355,3 +436,14 @@ def test_haul_page_end_to_end(client, world):
         "ore_1": "3", "econ_1": "3"}).text
     assert "Wave 1" in html and "Wave 2" in html            # 500k m3 over a ~318k hold
     assert "jumps in total" in html and "reward per jump" in html
+
+
+def test_esi_unreachable_still_plans_a_high_sec_trip(client, monkeypatch):
+    """No gate data from ESI (down, or unreachable): still plan, just without gate counts."""
+    from app.esi import client as esi
+
+    async def boom(*a, **k):
+        raise ConnectionError("ESI unreachable")
+    monkeypatch.setattr(esi, "get", boom)
+    html = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=loaded_empty").text
+    assert "AC2E-3 → Jita" in html and "round trip" in html

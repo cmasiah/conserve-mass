@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.db import session_scope, utcnow
 from app.esi import client as esi
 from app.models import (
+    MapGate,
     Asset, Character, CharacterSkill, Contract, CynoPoint, EntityName, JumpPilot, Location,
     MapSystem, Setting, TypeInfo,
 )
@@ -45,9 +46,9 @@ BONUS_DEFAULTS = {
     "fuel_per_jf": 0.10,          # Jump Freighters: -10% fuel per level
     "cargo_per_racial": 0.05,     # <Race> Freighter: +5% cargo per level
     "economizer_fuel": 0.10,      # each Jump Drive Economizer: -X% fuel
-    "ore_expander_cargo": 0.275,  # each ORE Expanded Cargohold: +X% cargo
-    "t2_expander_cargo": 0.275,   # each Expanded Cargohold II: +X% cargo
-    "economizer_volume": 10500,   # m3 an unfitted economizer takes in the hold
+    "ore_expander_cargo": 0.29,   # each ORE Expanded Cargohold: +X% cargo (1.29 in game data)
+    "t2_expander_cargo": 0.275,   # each Expanded Cargohold II: +X% cargo (1.275)
+    "economizer_volume": 3500,    # m3 ONE unfitted economizer takes in the hold (3 = 10,500)
 }
 BONUS_LABELS = {
     "range_per_jdc": "Jump Drive Calibration: range per level",
@@ -90,8 +91,18 @@ def _set_json(db: Session, key: str, value) -> None:
     db.add(row)
 
 
+# Values earlier versions shipped as defaults that were wrong. A saved value equal to one
+# of these (and not read from game data) is treated as never set, so the fix applies.
+_OLD_WRONG_DEFAULTS = {"ore_expander_cargo": 0.275, "economizer_volume": 10500}
+
+
 def bonuses(db: Session) -> dict[str, float]:
-    return {**BONUS_DEFAULTS, **_get_json(db, "jump:bonuses", {})}
+    saved = _get_json(db, "jump:bonuses", {})
+    from_game = _get_json(db, "jump:module_source", {})
+    for k, bad in _OLD_WRONG_DEFAULTS.items():
+        if k not in from_game and saved.get(k) == bad:
+            saved.pop(k)
+    return {**BONUS_DEFAULTS, **saved}
 
 
 def save_bonuses(db: Session, values: dict[str, float]) -> None:
@@ -150,11 +161,109 @@ async def import_map(concurrency: int = 12) -> int:
             _set_json(db, "jump:map_status", {"state": "done", "finished": utcnow().isoformat(),
                                               "total": len(ids)})
         _GRAPHS.clear()
+        with session_scope() as db:
+            need_gates = db.query(MapGate).count() == 0
+        if need_gates:
+            await import_gates()
         return len(systems)
     except Exception as e:  # noqa: BLE001 — show on the page, try again later
         log.exception("Star map import failed")
         with session_scope() as db:
             _set_json(db, "jump:map_status", {"state": "failed", "error": str(e)[:200]})
+        return 0
+
+
+# ------------------------------------------------------------------ stargates (for the map)
+
+# CCP's static data as CSV (one ~1 MB file); ESI is the slower fallback.
+GATES_CSV_URL = "https://www.fuzzwork.co.uk/dump/latest/mapSolarSystemJumps.csv"
+
+
+def gates_status(db: Session) -> dict:
+    st = _get_json(db, "jump:gates_status", {})
+    st["gates"] = db.query(MapGate).count()
+    return st
+
+
+def parse_gates_csv(text: str) -> set[tuple[int, int]]:
+    import csv
+    import io
+    rows = csv.DictReader(io.StringIO(text))
+    out = set()
+    for r in rows:
+        try:
+            a, b = int(r["fromSolarSystemID"]), int(r["toSolarSystemID"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out |= {(a, b), (b, a)}
+    return out
+
+
+async def _gates_from_csv() -> set[tuple[int, int]]:
+    import httpx
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        r = await client.get(GATES_CSV_URL, headers={"User-Agent": "conserve-mass-ops"})
+        r.raise_for_status()
+        return parse_gates_csv(r.text)
+
+
+async def _gates_from_esi(system_ids: list[int], concurrency: int = 12) -> set[tuple[int, int]]:
+    """Every system's stargates, then each gate's destination: ~20k public calls."""
+    sem = asyncio.Semaphore(concurrency)
+
+    async def get(path):
+        async with sem:
+            try:
+                return await esi.get(path)
+            except esi.EsiError:
+                return None
+    gate_owner: dict[int, int] = {}
+    for start in range(0, len(system_ids), 500):
+        batch = system_ids[start:start + 500]
+        infos = await asyncio.gather(*(get(f"/universe/systems/{i}") for i in batch))
+        for sid, info in zip(batch, infos):
+            for g in (info or {}).get("stargates", []):
+                gate_owner[g] = sid
+        with session_scope() as db:
+            _set_json(db, "jump:gates_status", {"state": "running", "source": "ESI",
+                                                "done": start + len(batch),
+                                                "total": len(system_ids)})
+    out = set()
+    gates = [g for g in gate_owner]
+    for start in range(0, len(gates), 1000):
+        batch = gates[start:start + 1000]
+        infos = await asyncio.gather(*(get(f"/universe/stargates/{g}") for g in batch))
+        for g, info in zip(batch, infos):
+            dest = ((info or {}).get("destination") or {}).get("system_id")
+            if dest:
+                out |= {(gate_owner[g], dest), (dest, gate_owner[g])}
+    return out
+
+
+async def import_gates() -> int:
+    """Download stargate connections once (for drawing the map). Returns pairs stored."""
+    with session_scope() as db:
+        _set_json(db, "jump:gates_status", {"state": "running"})
+        known = set(db.scalars(select(MapSystem.system_id)))
+    try:
+        try:
+            pairs, source = await _gates_from_csv(), "static data"
+        except Exception as e:  # noqa: BLE001 — fall back to ESI
+            log.info("Stargate CSV unavailable (%s); using ESI", e)
+            pairs, source = set(), ""
+        if len(pairs) < 1000:
+            pairs, source = await _gates_from_esi(sorted(known)), "ESI"
+        pairs = {(a, b) for a, b in pairs if a in known and b in known}
+        with session_scope() as db:
+            db.query(MapGate).delete()
+            db.bulk_save_objects([MapGate(from_id=a, to_id=b) for a, b in pairs])
+            _set_json(db, "jump:gates_status", {"state": "done", "source": source,
+                                                "finished": utcnow().isoformat()})
+        return len(pairs)
+    except Exception as e:  # noqa: BLE001
+        log.exception("Stargate import failed")
+        with session_scope() as db:
+            _set_json(db, "jump:gates_status", {"state": "failed", "error": str(e)[:200]})
         return 0
 
 
@@ -218,6 +327,35 @@ class Profile:
         if not self.hull_fuel:
             return self.fuel_per_ly
         return self.hull_fuel * (1 - self.bonus["economizer_fuel"]) ** economizers
+
+    @property
+    def carried_econ(self) -> int:
+        """Economizers riding in the hold on a loaded leg, to refit for the empty trip
+        back: whatever low slots aren't economizers already (only with expanders fitted)."""
+        return max(0, LOW_SLOTS - self.economizers) if (self.ore or self.t2) else 0
+
+    @property
+    def hold_m3(self) -> float:
+        """Cargo you can actually load: the hold minus the economizers carried."""
+        vol = (self.bonus or BONUS_DEFAULTS).get("economizer_volume",
+                                                 BONUS_DEFAULTS["economizer_volume"])
+        return max(0.0, self.cargo_m3 - self.carried_econ * vol)
+
+    @property
+    def empty_fuel_per_ly(self) -> float:
+        """Isotopes/LY on an empty leg with every low slot an economizer."""
+        econ = (self.bonus or BONUS_DEFAULTS).get("economizer_fuel",
+                                                  BONUS_DEFAULTS["economizer_fuel"])
+        if "fuel_per_ly" in self.overridden or not self.hull_fuel:
+            return self.fuel_per_ly * (1 - econ) ** max(0, LOW_SLOTS - self.economizers)
+        return self.fuel_with(LOW_SLOTS)
+
+    def for_leg(self, leg: str) -> "Profile":
+        """This pilot as fitted for a loaded leg (its own fit) or an empty one (3 econ)."""
+        if leg != "empty":
+            return self
+        from dataclasses import replace
+        return replace(self, fuel_per_ly=self.empty_fuel_per_ly)
 
     def cargo_with(self, ore: int, t2: int = 0) -> float:
         if not self.hull_cargo:
@@ -380,6 +518,7 @@ class Route:
     legs: list[Leg] = field(default_factory=list)
     landing: MapSystem | None = None      # when the destination is high-sec
     gate_jumps: int | None = None          # gates from landing to destination (None: not looked up)
+    gate_path: list[int] = field(default_factory=list)  # system ids, landing .. destination
     error: str | None = None
 
     @property
@@ -466,20 +605,133 @@ def plan_route(db: Session, origin_id: int, dest_id: int, p: Profile,
     return r
 
 
+MAP_MAX_SYSTEMS = 1600
+
+
+def map_data(db: Session, legs: list[tuple[str, str, "Route"]], range_ly: float) -> dict | None:
+    """Everything the Dotlan-style map needs, as plain JSON: the systems of every region
+    the trip touches (positions top-down, north up: x right, z up), their stargates, the
+    jumps of each leg and the gate path after a high-sec landing."""
+    routes = [r for _t, _f, r in legs if r and not r.error and (r.legs or r.landing)]
+    if not routes:
+        return None
+    on_route: dict[int, MapSystem] = {}
+    for r in routes:
+        for s in [r.origin, r.dest, r.landing] + [lg.to for lg in r.legs]:
+            if s is not None:
+                on_route[s.system_id] = s
+        for sid in r.gate_path:
+            if sid not in on_route and (s := db.get(MapSystem, sid)):
+                on_route[sid] = s
+    regions = {s.region_id for s in on_route.values() if s.region_id}
+    ctx = db.scalars(select(MapSystem).where(MapSystem.region_id.in_(regions))).all() \
+        if regions else []
+    if len(ctx) > MAP_MAX_SYSTEMS:
+        # Many regions: keep what's near the route.
+        xs = [s.x for s in on_route.values()]
+        zs = [s.z for s in on_route.values()]
+        pad = 6 * LY_M
+        ctx = [s for s in ctx if min(xs) - pad <= s.x <= max(xs) + pad
+               and min(zs) - pad <= s.z <= max(zs) + pad][:MAP_MAX_SYSTEMS]
+    systems = {s.system_id: s for s in ctx} | on_route
+    ids = list(systems)
+    idx = {sid: i for i, sid in enumerate(ids)}
+    nodes = [{"id": sid, "n": s.name, "s": round(s.security, 1),
+              "x": round(s.x / LY_M, 3), "y": round(-s.z / LY_M, 3),
+              "c": s.constellation_id, "r": s.region_id or 0, "rn": s.region_name or "",
+              "on": sid in on_route} for sid, s in systems.items()]
+    gates = []
+    if ids:
+        for a, b in db.execute(select(MapGate.from_id, MapGate.to_id).where(
+                MapGate.from_id.in_(ids), MapGate.to_id.in_(ids))):
+            if a < b:
+                sa, sb = systems[a], systems[b]
+                kind = 2 if sa.region_id != sb.region_id else (
+                    1 if sa.constellation_id != sb.constellation_id else 0)
+                gates.append([idx[a], idx[b], kind])
+    out_legs = []
+    for title, fit, r in legs:
+        if not r or r.error:
+            continue
+        out_legs.append({
+            "title": title, "fit": fit,
+            "jumps": [[idx[lg.frm.system_id], idx[lg.to.system_id], round(lg.ly, 2), lg.fuel]
+                      for lg in r.legs],
+            "gates": [idx[s] for s in r.gate_path if s in idx]})
+    return {"nodes": nodes, "gates": gates, "legs": out_legs, "range": round(range_ly, 2),
+            "has_gates": bool(gates)}
+
+
 def landing_candidates(db: Session, dest: MapSystem, g: Graph, limit: int = 6) -> list[MapSystem]:
     """Cyno-able systems closest (by LY) to a high-sec destination."""
     near = sorted(((ly(s, dest), s) for s in g.sys.values()), key=lambda x: x[0])
     return [s for _d, s in near[:limit]]
 
 
-async def gate_counts(origins: list[int], dest: int) -> dict[int, int]:
-    """Gate jumps from each candidate to the destination (ESI /route, safest path)."""
+async def gate_paths(origins: list[int], dest: int) -> dict[int, list[int]]:
+    """Gate path (system ids, both ends included) from each candidate to the destination
+    (ESI /route, safest path). Unreachable: an empty list."""
     async def one(o):
         try:
-            return o, len(await esi.get(f"/route/{o}/{dest}", params={"flag": "secure"})) - 1
-        except esi.EsiError:
-            return o, 99
+            return o, list(await esi.get(f"/route/{o}/{dest}", params={"flag": "secure"}))
+        except Exception as e:  # noqa: BLE001 — ESI down / unreachable: plan without gates
+            log.info("Gate route %s -> %s unavailable: %s", o, dest, e)
+            return o, []
     return dict(await asyncio.gather(*(one(o) for o in origins)))
+
+
+async def gate_counts(origins: list[int], dest: int) -> dict[int, int]:
+    """Gate jumps from each candidate to the destination."""
+    return {o: (len(p) - 1 if p else 99) for o, p in (await gate_paths(origins, dest)).items()}
+
+
+async def plan_trip_leg(db: Session, a: MapSystem, b: MapSystem, p: Profile,
+                        only_cynos: bool = False) -> "Route":
+    """One direction, fitted as `p`; for a high-sec end, also the gates from the landing."""
+    paths = None
+    if not can_cyno(b):
+        cands = landing_candidates(db, b, graph(db, only_cynos))
+        paths = await gate_paths([c.system_id for c in cands], b.system_id)
+    # Only candidates with a known gate path count; unknown ones sort last, shown as "?".
+    gates = {o: len(x) - 1 for o, x in (paths or {}).items() if x} or None
+    r = plan_route(db, a.system_id, b.system_id, p, only_cynos, gates)
+    if r.landing and paths:
+        r.gate_path = paths.get(r.landing.system_id) or []
+    return r
+
+
+TRIPS = {
+    "loaded": ("One way, loaded", "loaded", None),
+    "empty": ("One way, empty", "empty", None),
+    "empty_loaded": ("Out empty, back loaded", "empty", "loaded"),
+    "loaded_empty": ("Out loaded, back empty", "loaded", "empty"),
+}
+
+
+def trip_steps(legs: list[tuple[str, str, "Route"]], cyno_ids: set[int] = frozenset()) -> list[dict]:
+    """Step-by-step: each jump (with where the cyno has to be), then any gates."""
+    steps = []
+    for li, (title, fit, r) in enumerate(legs):
+        if r.error:
+            continue
+        n = len(r.legs)
+        for i, lg in enumerate(r.legs):
+            last = i == n - 1
+            steps.append({
+                "leg": li, "leg_title": title, "fit": fit, "kind": "jump", "index": i,
+                "from": lg.frm.name, "to": lg.to.name, "from_id": lg.frm.system_id,
+                "to_id": lg.to.system_id, "ly": round(lg.ly, 2), "fuel": lg.fuel,
+                "sec": round(lg.to.security, 1), "region": lg.to.region_name or "",
+                "role": ("destination" if last and not r.landing else
+                         "landing" if last else f"mid {i + 1}"),
+                "my_cyno": lg.to.system_id in cyno_ids})
+        if r.landing:
+            steps.append({
+                "leg": li, "leg_title": title, "fit": fit, "kind": "gates",
+                "from": r.landing.name, "to": r.dest.name, "from_id": r.landing.system_id,
+                "to_id": r.dest.system_id, "gates": r.gate_jumps,
+                "path": [*getattr(r, "gate_path", [])]})
+    return steps
 
 
 async def isotope_prices(db: Session) -> dict[int, float]:
@@ -589,7 +841,7 @@ def lanes(db: Session, p: Profile | None, statuses=("outstanding", "in_progress"
         lane = Lane(start, end, cs)
         if p is not None:
             lane.route = plan_route(db, sa, sb, p, only_cynos)
-            lane.trips, lane.unfit = pack(cs, p.cargo_m3 or float("inf"), p.max_collateral)
+            lane.trips, lane.unfit = pack(cs, p.hold_m3 or float("inf"), p.max_collateral)
         out.append(lane)
     out.sort(key=lambda ln: (-ln.per_jump, -ln.reward))
     return out

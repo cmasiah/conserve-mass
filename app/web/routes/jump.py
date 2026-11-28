@@ -24,12 +24,15 @@ def _back(tab: str, **extra) -> RedirectResponse:
 
 @router.get("")
 async def planner(request: Request, tab: str = "route", pilot: int = 0, frm: str = "",
-                  to: str = "", cynos: int = 0, db: Session = Depends(get_db)):
+                  to: str = "", cynos: int = 0, trip: str = "", leg: str = "",
+                  db: Session = Depends(get_db)):
     status = svc.map_status(db)
     profs = svc.profiles(db)
     ready = [p for p in profs if p.ready]
     chosen = next((p for p in ready if p.character_id == pilot), ready[0] if ready else None)
-    ctx = {"tab": tab, "status": status, "profiles": profs, "ready": ready, "chosen": chosen,
+    trip = trip if trip in svc.TRIPS else ("empty" if leg == "empty" else "loaded")
+    ctx = {"tab": tab, "status": status, "trip": trip, "trips": svc.TRIPS, "legs": [],
+           "steps": [], "map": None, "gates_status": svc.gates_status(db), "profiles": profs, "ready": ready, "chosen": chosen,
            "frm": frm, "to": to, "cynos": cynos, "route": None, "lanes": [], "prices": {},
            "cyno_points": [], "bonus": svc.bonuses(db), "bonus_labels": svc.BONUS_LABELS,
            "now": utcnow(), "haul": None, "haul_form": {},
@@ -50,12 +53,19 @@ async def planner(request: Request, tab: str = "route", pilot: int = 0, frm: str
         if a is None or b is None:
             flash(request, f"Unknown system: {to if a else frm}", "error")
         else:
-            gates = None
-            if not svc.can_cyno(b):
-                cands = svc.landing_candidates(db, b, svc.graph(db, bool(cynos)))
-                gates = await svc.gate_counts([c.system_id for c in cands], b.system_id)
-            ctx["route"] = svc.plan_route(db, a.system_id, b.system_id, chosen, bool(cynos), gates)
             ctx["frm"], ctx["to"] = a.name, b.name
+            _title, out_fit, back_fit = svc.TRIPS[trip]
+            legs = [(f"{a.name} → {b.name}", out_fit,
+                     await svc.plan_trip_leg(db, a, b, chosen.for_leg(out_fit), bool(cynos)))]
+            if back_fit:
+                legs.append((f"{b.name} → {a.name}", back_fit,
+                             await svc.plan_trip_leg(db, b, a, chosen.for_leg(back_fit),
+                                                     bool(cynos))))
+            ctx["legs"] = legs
+            ctx["route"] = legs[0][2]
+            cyno_ids = set(db.scalars(select(CynoPoint.system_id)))
+            ctx["steps"] = svc.trip_steps(legs, cyno_ids)
+            ctx["map"] = svc.map_data(db, legs, chosen.range_ly)
     if tab == "lanes" and status["systems"]:
         ctx["lanes"] = svc.lanes(db, chosen, only_cynos=bool(cynos))
     if tab in ("route", "lanes") and chosen:
@@ -129,6 +139,17 @@ async def haul(request: Request, db: Session = Depends(get_db)):
     elif not haulers:
         flash(request, "Pick at least one JF pilot.", "error")
     return render(request, "jump.html", **ctx)
+
+
+@router.post("/map/gates")
+async def import_gates(request: Request, csrf: str = Form("")):
+    """Download the stargate connections (for the route map), in the background."""
+    require_csrf(request, csrf)
+    t = asyncio.get_running_loop().create_task(svc.import_gates())
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    flash(request, "Downloading stargates for the map; refresh in a minute.")
+    return _back("route")
 
 
 @router.post("/map/import")
