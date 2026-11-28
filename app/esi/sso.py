@@ -38,8 +38,9 @@ PERSONAL_SCOPES = [
     "esi-assets.read_assets.v1",
     "esi-universe.read_structures.v1",      # names of structures its jobs/assets sit in
 ]
-# Implants, jump clones (Characters › Implants). Requested on new links but not required:
-# characters linked before keep working and just don't show implants until re-linked.
+# Implants, jump clones (Characters › Implants). Optional: EVE rejects the whole login with
+# "invalid_scope" unless they're also ticked on the app at developers.eveonline.com, so
+# they're only asked for on an "with implants" link, or once one such link has worked.
 CLONE_SCOPES = [
     "esi-clones.read_implants.v1",
     "esi-clones.read_clones.v1",
@@ -53,10 +54,21 @@ CORP_INDUSTRY_SCOPES = [
 INDUSTRY_SCOPES = [s for s in PERSONAL_SCOPES if s not in COURIER_SCOPES] + CORP_INDUSTRY_SCOPES
 SCOPE_PROFILES = {
     "courier": COURIER_SCOPES,
-    "personal": PERSONAL_SCOPES + CLONE_SCOPES,
-    "industry": COURIER_SCOPES + INDUSTRY_SCOPES + CLONE_SCOPES,
+    "personal": PERSONAL_SCOPES,
+    "industry": COURIER_SCOPES + INDUSTRY_SCOPES,
     "login": [],
 }
+CLONE_PROFILES = ("personal", "industry")
+CLONES_OK_KEY = "sso:clone_scopes_ok"   # set once a login has actually granted them
+
+
+def scopes_for(profile: str, clones: bool = False) -> list[str]:
+    scopes = list(SCOPE_PROFILES.get(profile, COURIER_SCOPES))
+    if clones and profile in CLONE_PROFILES:
+        scopes += [s for s in CLONE_SCOPES if s not in scopes]
+    return scopes
+
+
 PROFILE_LABELS = {"personal": "Member", "industry": "Director+", "courier": "Contracts only"}
 
 _jwks_client: PyJWKClient | None = None

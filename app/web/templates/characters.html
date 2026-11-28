@@ -176,6 +176,21 @@
 {% endif %}
 
 {% if tab == 'implants' %}
+{% set need_relink = implants.values() | rejectattr('has_implants_scope') | list %}
+{% if need_relink %}
+<div class="card relink-card">
+  <strong>Implants and clones need two extra ESI scopes.</strong> {{ need_relink | length }} character{{ 's' if need_relink | length != 1 }} don't have them yet.
+  <ol class="small">
+    <li>At <a href="https://developers.eveonline.com/applications" target="_blank" rel="noopener">developers.eveonline.com</a>, open this app and tick
+      <span class="mono">esi-clones.read_implants.v1</span> and <span class="mono">esi-clones.read_clones.v1</span>, then save.
+      <span class="muted">Skip this and EVE answers with an "invalid_scope" error page.</span></li>
+    <li>Link the characters again with implants:
+      <a class="btn small" href="/characters/onboard/start?profile=personal&clones=1">⚡ Bulk link Members</a>
+      <a class="btn small" href="/characters/onboard/start?profile=industry&clones=1">⚡ Bulk link Director+</a></li>
+  </ol>
+  <div class="small muted">After the first one works, every future link asks for them automatically.</div>
+</div>
+{% endif %}
 <table class="chars-table char-info">
   <thead><tr>
     <th>Character</th>
@@ -194,7 +209,7 @@
     <tr>
       {{ who(ch) }}
       <td class="small">
-        {% if not r.has_implants_scope %}<a class="pill warn" href="/auth/login?profile={{ 'industry' if ch.link_role == 'director' else 'personal' }}" title="Link this character again to grant the implants scope">re-link to see implants</a>
+        {% if not r.has_implants_scope %}<a class="pill warn" href="/auth/login?profile={{ 'industry' if ch.link_role == 'director' else 'personal' }}&clones=1" title="Link this character again to grant the implants scope (tick the scopes on your EVE app first, see above)">re-link to see implants</a>
         {% elif not ch.track_skills %}<span class="muted">Skills tracking is off</span>
         {% elif r.implants %}<strong>{{ r.implants | length }}</strong><span class="muted">/10</span>
           <div class="implant-list">{% for i in r.implants %}<span>{{ i }}</span>{% endfor %}</div>

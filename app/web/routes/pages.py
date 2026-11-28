@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db, utcnow
+from app.esi.sso import scopes_for as sso_scopes_for
 from app.discord_bot import bot
 from app.esi import usage as esi_usage
 from app.esi.sso import (
@@ -272,11 +273,11 @@ def _onboard_profile(value: str | None) -> str:
 
 
 @router.get("/characters/onboard/start")
-def onboard_start(request: Request, profile: str = "industry"):
+def onboard_start(request: Request, profile: str = "industry", clones: int = 0):
     """Start bulk linking: every EVE login comes back to the onboarding page."""
     profile = _onboard_profile(profile)
-    request.session["onboard"] = {"linked": [], "profile": profile}
-    return _redirect(f"/auth/login?profile={profile}")
+    request.session["onboard"] = {"linked": [], "profile": profile, "clones": bool(clones)}
+    return _redirect(f"/auth/login?profile={profile}{'&clones=1' if clones else ''}")
 
 
 @router.get("/characters/onboard")
@@ -285,12 +286,13 @@ def onboard(request: Request, db: Session = Depends(get_db)):
     if state is None:
         return _redirect("/characters")
     profile = _onboard_profile(state.get("profile"))
-    need = set(SCOPE_PROFILES[profile])
+    clones = bool(state.get("clones"))
+    need = set(sso_scopes_for(profile, clones))
     chars = db.scalars(select(Character).order_by(Character.name)).all()
     ready = [c for c in chars if c.token and c.token.is_valid and need <= c.token.scope_set]
     pending = [c for c in chars if c not in ready]
     return render(request, "onboard.html", linked=state.get("linked", []), ready=ready,
-                  pending=pending, total=len(chars), profile=profile,
+                  pending=pending, total=len(chars), profile=profile, clones=clones,
                   profile_label=PROFILE_LABELS[profile])
 
 

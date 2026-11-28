@@ -27,7 +27,24 @@ aside.side { position: sticky; top: 0; height: 100vh; display: flex; flex-direct
 .brand small { color: var(--muted); font-weight: 400; letter-spacing: .08em; font-size: 11px; }
 aside nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; padding-right: 2px; }
 /* Items keep their height: when every group is open the menu scrolls instead of squeezing them. */
-aside nav > *, aside.side > :not(nav) { flex-shrink: 0; }
+aside nav > *, aside.side > :not(.nav-wrap) { flex-shrink: 0; }
+/* Scroll hints: a fade and an arrow on whichever edge has menu items out of view. */
+.nav-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.nav-wrap > nav { flex: 1 1 auto; }
+.nav-more { position: absolute; left: 0; right: 0; z-index: 2; height: 34px; padding: 0; border: 0;
+  border-radius: 0; display: flex; justify-content: center; cursor: pointer; opacity: 0;
+  pointer-events: none; transition: opacity .18s ease; }
+.nav-more.up { top: 0; align-items: flex-start; background: linear-gradient(180deg, #121923 25%, rgba(18,25,35,0)); }
+.nav-more.down { bottom: 0; align-items: flex-end; background: linear-gradient(0deg, #0f151d 25%, rgba(15,21,29,0)); }
+.nav-more svg { width: 26px; height: 16px; fill: none; stroke: var(--accent); stroke-width: 2.4;
+  stroke-linecap: round; stroke-linejoin: round; background: rgba(255,255,255,.06);
+  border: 1px solid var(--line); border-radius: 10px; padding: 1px 4px; box-sizing: content-box;
+  animation: nav-nudge 1.6s ease-in-out infinite; }
+.nav-more:hover svg { background: rgba(255,255,255,.12); }
+.more-up > .nav-more.up, .more-down > .nav-more.down { opacity: 1; pointer-events: auto; }
+@keyframes nav-nudge { 50% { transform: translateY(2px); } }
+.nav-more.up svg { animation-direction: reverse; }
+@media (prefers-reduced-motion: reduce) { .nav-more svg { animation: none; } }
 aside nav { scrollbar-width: thin; scrollbar-color: var(--line) transparent; overscroll-behavior: contain; }
 .nav-sec { margin-top: 6px; }
 .nav-group { display: flex; align-items: center; gap: 11px; width: 100%; height: 38px; padding: 0 12px;
@@ -107,6 +124,7 @@ body.with-nav.nav-mini { grid-template-columns: 68px minmax(0, 1fr); }
   .nav-sec { width: 100%; }
   .nav-item { height: 36px; }
   .nav-fold { display: none; }
+  .nav-more { display: none; }
 }
 
 /* ---- meters (slot usage, job progress) ---- */

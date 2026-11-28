@@ -47,6 +47,7 @@ def test_tabs_show_implants_remaps_and_clones(client, seeded):
     # 24h - 4h (Infomorph Synchronizing IV) = 20h; jumped 10h ago, so 10h to go.
     assert "jump in 9h" in html or "jump in 10h" in html
     assert "re-link to see implants" in html      # the second character's old token
+    assert "developers.eveonline.com" in html and "clones=1" in html
     # The Characters list itself isn't on this tab.
     assert "Contract poller" not in html
 
@@ -65,11 +66,30 @@ def test_list_tab_is_the_default(client, seeded):
     assert "Contract poller" in html and 'class="active">Characters</a>' in html
 
 
-def test_new_links_ask_for_clone_scopes_but_old_tokens_still_count_as_members():
-    from app.esi.sso import CLONE_SCOPES, PERSONAL_SCOPES, SCOPE_PROFILES
+def test_clone_scopes_are_opt_in_until_a_link_proves_the_app_has_them(client, seeded,
+                                                                     monkeypatch):
+    """EVE rejects the whole login if the app lacks a requested scope, so plain links
+    must not ask for them until one 'with implants' link has worked."""
+    from urllib.parse import parse_qs, urlparse
+
+    from app.esi.sso import CLONE_SCOPES, CLONES_OK_KEY, PERSONAL_SCOPES, SCOPE_PROFILES
+    from app.models import Setting
     for p in ("personal", "industry"):
-        assert set(CLONE_SCOPES) <= set(SCOPE_PROFILES[p])
+        assert not set(CLONE_SCOPES) & set(SCOPE_PROFILES[p])
     assert not set(CLONE_SCOPES) & set(PERSONAL_SCOPES)
+
+    from app.web.routes import auth
+    monkeypatch.setattr(auth, "get_settings",
+                        lambda: type("S", (), {"missing_required": lambda self: []})())
+
+    def asked(url):
+        loc = client.get(url, follow_redirects=False).headers["location"]
+        return set(parse_qs(urlparse(loc).query)["scope"][0].split())
+    assert not set(CLONE_SCOPES) & asked("/auth/login?profile=personal")
+    assert set(CLONE_SCOPES) <= asked("/auth/login?profile=personal&clones=1")
+    seeded.add(Setting(key=CLONES_OK_KEY, value="1")); seeded.commit()
+    assert set(CLONE_SCOPES) <= asked("/auth/login?profile=industry")
+    assert not set(CLONE_SCOPES) & asked("/auth/login?profile=courier")
 
 
 def test_sync_stores_attributes_implants_and_clones(seeded, monkeypatch):

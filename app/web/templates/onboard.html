@@ -20,7 +20,7 @@
 </div>
 
 <div class="card onboard-next">
-  <a class="btn primary big" id="next" href="/auth/login?profile={{ profile }}">Link next character →</a>
+  <a class="btn primary big" id="next" href="/auth/login?profile={{ profile }}{{ '&clones=1' if clones }}">Link next character →</a>
   <label class="small"><input type="checkbox" id="auto"> Continue automatically</label>
   <span class="small muted" id="countdown"></span>
   <ol class="small muted">

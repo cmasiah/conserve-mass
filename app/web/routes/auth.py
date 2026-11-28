@@ -34,14 +34,22 @@ def login_page(request: Request):
     return render(request, "login.html", missing=missing)
 
 
+def _clones_ok() -> bool:
+    """True once a login has granted the implants/clones scopes, which proves the EVE app
+    has them ticked; from then on every Member / Director+ link asks for them."""
+    from app.models import Setting
+    with session_scope() as db:
+        return db.get(Setting, sso.CLONES_OK_KEY) is not None
+
+
 @router.get("/auth/login")
-def start_login(request: Request, profile: str = "courier"):
+def start_login(request: Request, profile: str = "courier", clones: int = 0):
     if get_settings().missing_required():
         return RedirectResponse("/login", status_code=303)
     state = secrets.token_urlsafe(24)
     request.session["oauth_state"] = state
     request.session["oauth_profile"] = profile
-    scopes = sso.SCOPE_PROFILES.get(profile, sso.COURIER_SCOPES)
+    scopes = sso.scopes_for(profile, bool(clones) or _clones_ok())
     return RedirectResponse(sso.authorize_url(state, scopes), status_code=303)
 
 
@@ -133,6 +141,9 @@ def save_login(tok: sso.TokenResult, pub: dict, corp_info: dict | None,
         token.access_token_enc = encrypt(tok.access_token)
         token.access_expires_at = tok.expires_at
         token.scopes = " ".join(tok.scopes)
+        if set(sso.CLONE_SCOPES) <= set(tok.scopes):
+            from app.models import Setting
+            db.merge(Setting(key=sso.CLONES_OK_KEY, value="1"))
         token.is_valid = True
         token.last_error = None
         token.updated_at = utcnow()
