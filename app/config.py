@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     industry_skills_poll_minutes: int = 60
     industry_jobs_poll_minutes: int = 5
     industry_blueprints_poll_minutes: int = 60
+    assets_poll_minutes: int = 60
 
     @field_validator("corporation_id", "discord_owner_user_id", mode="before")
     @classmethod

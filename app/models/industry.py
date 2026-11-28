@@ -1,7 +1,7 @@
 """Industry: character skills, industry jobs, blueprints."""
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, UTCDateTime, utcnow
@@ -119,3 +119,50 @@ class SkillQueue(Base):
     # JSON {skill_id: highest level queued}, for showing queued levels on the Slots page
     queued: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class Asset(Base):
+    """One stack of items owned by a character or corp (ESI assets), with where it sits
+    worked out at sync time so searching and totals never call ESI."""
+
+    __tablename__ = "assets"
+
+    item_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    owner_type: Mapped[str] = mapped_column(String(12))          # character | corporation
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    type_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    quantity: Mapped[int] = mapped_column(BigInteger)
+    location_id: Mapped[int] = mapped_column(BigInteger)          # as ESI gives it
+    location_flag: Mapped[str] = mapped_column(String(40), default="")
+    is_singleton: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Worked out from the owner's asset tree:
+    site_id: Mapped[int] = mapped_column(BigInteger, index=True)  # station / structure / system
+    division: Mapped[str] = mapped_column(String(12), default="")  # CorpSAG1..7, or ""
+    container_id: Mapped[int | None] = mapped_column(BigInteger, index=True)  # innermost
+    container_path: Mapped[str] = mapped_column(String(200), default="")  # ",outer,inner,"
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class AssetWatch(Base):
+    """A place marked for stockpile tracking: a system, a structure/station, one corp
+    division inside a structure, or a single container."""
+
+    __tablename__ = "asset_watches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(12))      # system | site | division | container
+    target_id: Mapped[int] = mapped_column(BigInteger)  # system / site / container item id
+    owner_id: Mapped[int | None] = mapped_column(BigInteger)   # division: the corp
+    division: Mapped[str] = mapped_column(String(12), default="")
+    label: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class MaterialTarget(Base):
+    """Stock levels for one item: below min -> shopping list, above max -> sell list."""
+
+    __tablename__ = "material_targets"
+
+    type_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    min_qty: Mapped[int | None] = mapped_column(BigInteger)
+    max_qty: Mapped[int | None] = mapped_column(BigInteger)

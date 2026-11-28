@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.config import get_settings
 from app.db import is_locked_error
+from app.services.assets import sync_assets
 from app.services.backup import run_backup
 from app.services.contract_sync import sync_corporation_contracts
 from app.services.industry import check_job_alerts, sync_blueprints, sync_jobs, sync_skills
@@ -58,6 +59,8 @@ def start() -> None:
                       IntervalTrigger(minutes=s.industry_blueprints_poll_minutes),
                       id="industry_blueprints",
                       next_run_time=datetime.now() + timedelta(seconds=105))
+    scheduler.add_job(_guarded(sync_assets), IntervalTrigger(minutes=s.assets_poll_minutes),
+                      id="industry_assets", next_run_time=datetime.now() + timedelta(seconds=135))
     # DB-only: catches jobs finishing between ESI syncs, no ESI calls.
     scheduler.add_job(_guarded(check_job_alerts), IntervalTrigger(minutes=1), id="industry_job_alerts")
     scheduler.start()
@@ -70,7 +73,7 @@ def shutdown() -> None:
 
 
 def trigger_industry_now() -> None:
-    for job_id in ("industry_skills", "industry_jobs", "industry_blueprints"):
+    for job_id in ("industry_skills", "industry_jobs", "industry_blueprints", "industry_assets"):
         job = scheduler.get_job(job_id)
         if job:
             job.modify(next_run_time=datetime.now())

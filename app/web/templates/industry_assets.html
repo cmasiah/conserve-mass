@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% from "partials/sync.html" import sync_now %}
+{% from "partials/clip.html" import copy_button, clip_script, watch_btn %}
+{% block title %}Assets · {{ APP_NAME }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/assets.css?v={{ ASSET_V }}">{% endblock %}
+{% block content %}
+{%- set here = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') -%}
+{%- macro link(site=0, owner='', division='', container=0) -%}
+/industry/assets?site={{ site }}&owner={{ owner }}&division={{ division }}&container={{ container }}&watched={{ watched }}&q={{ q | urlencode }}
+{%- endmacro %}
+<div class="toolbar">
+  <h1 style="margin:0">Assets</h1>
+  <span class="small muted">{{ total_stacks }} stacks tracked · {{ watch_count }} watched place{{ 's' if watch_count != 1 }}</span>
+  <span class="spacer"></span>
+  <a class="btn" href="/industry/materials">Materials →</a>
+  {{ sync_now(sync_feeds, "/industry/sync-now", csrf, now, back="/industry/assets") }}
+</div>
+
+<div class="assets-layout">
+  <aside class="card places">
+    <div class="places-head">
+      <strong>Places</strong>
+      <span class="small muted">☆ = watch for stockpiles</span>
+    </div>
+    {% for s in tree %}
+      <section class="fold open place-sys">
+        <button type="button" class="fold-head">
+          <svg class="fold-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+          <span class="fold-title">{{ s.name }}</span><span class="pill small">{{ s.count }}</span>
+        </button>
+        {% if s.system_id %}<span class="sys-watch">{{ watch_btn(csrf, 'system', s.system_id, s.name ~ ' (whole system)', s.watched, here) }}</span>{% endif %}
+        <div class="fold-body">
+        {% for st in s.sites %}
+          <details class="place-site" {{ 'open' if st.id == site else '' }}>
+            <summary>
+              {{ watch_btn(csrf, 'site', st.id, st.name, st.watched, here, covered_by=s.name if s.watched else '') }}
+              <a href="{{ link(site=st.id) }}" class="{{ 'sel' if st.id == site and not owner }}">{{ st.name }}</a>
+              <span class="muted small">{{ st.count }}</span>
+            </summary>
+            {% for o in st.owners %}
+              <div class="place-owner">
+                {% if o.type == 'corporation' and o.division %}
+                  {{ watch_btn(csrf, 'division', st.id, st.name ~ ' › ' ~ o.label, o.watched, here, o.id, o.division, covered_by=(st.name if st.watched else (s.name if s.watched else ''))) }}
+                {% elif o.type == 'character' %}
+                  {{ watch_btn(csrf, 'personal', st.id, st.name ~ ' › ' ~ o.label, o.watched, here, o.id, covered_by=(st.name if st.watched else (s.name if s.watched else ''))) }}
+                {% else %}<span class="star-pad"></span>{% endif %}
+                <a href="{{ link(site=st.id, owner=o.type ~ ':' ~ o.id, division=o.division) }}"
+                   class="{{ 'sel' if owner == o.type ~ ':' ~ o.id and division == o.division and st.id == site and not container }}">{{ o.label }}</a>
+                <span class="muted small">{{ o.count }}</span>
+              </div>
+              {% for c in o.containers %}
+                <div class="place-cont">
+                  {{ watch_btn(csrf, 'container', c.id, st.name ~ ' › ' ~ c.label, c.watched, here, covered_by=(o.label if o.watched else (st.name if st.watched else (s.name if s.watched else '')))) }}
+                  <a href="{{ link(site=st.id, owner=o.type ~ ':' ~ o.id, division=o.division, container=c.id) }}"
+                     class="{{ 'sel' if container == c.id }}">📦 {{ c.label }}</a>
+                  <span class="muted small">{{ c.count }}</span>
+                </div>
+              {% endfor %}
+            {% endfor %}
+          </details>
+        {% endfor %}
+        </div>
+      </section>
+    {% else %}
+      <p class="small muted">Nothing synced yet. Assets sync hourly for characters with the <strong>Assets</strong>
+        switch on (Characters page) and for switched-on corps through a Director+ character.</p>
+    {% endfor %}
+  </aside>
+
+  <section class="items">
+    <form method="get" class="toolbar items-filter">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search item name…" autofocus>
+      <input type="hidden" name="site" value="{{ site }}"><input type="hidden" name="owner" value="{{ owner }}">
+      <input type="hidden" name="division" value="{{ division }}"><input type="hidden" name="container" value="{{ container }}">
+      <label class="small check"><input type="checkbox" name="watched" value="1" {{ 'checked' if watched }} onchange="this.form.submit()"> Watched places only</label>
+      <button>Search</button>
+      {% if q or site or owner or container or watched %}<a class="small" href="/industry/assets">Clear</a>{% endif %}
+      <span class="spacer"></span>
+      {{ copy_button(clip, "Copy list", "primary") }}
+      <a class="small" href="/industry/assets/export.txt?{{ request.url.query }}" title="Same list as plain text, for other tools">.txt</a>
+    </form>
+    <div class="small muted scope">
+      Showing {{ lines | length }}{% if more %} of {{ lines | length + more }}{% endif %} item types · {{ shown_stacks }} stacks
+      {% if scope %} in <strong>{{ scope | join(' › ') }}</strong>{% else %} across everything{% endif %}
+      {% if more %} · narrow it down to see the rest (the copy button includes all of them){% endif %}
+    </div>
+    <table class="sortable assets-table">
+      <thead><tr><th data-sort="text">Item</th><th data-sort="num" class="num">Quantity</th>
+        <th data-sort="num" class="num">Stacks</th><th data-sort="text">Where</th></tr></thead>
+      <tbody>
+      {% for ln in lines %}
+        {% set places = ln.places | dictsort(by='value', reverse=true) %}
+        <tr>
+          <td><img src="https://images.evetech.net/types/{{ ln.type_id }}/icon?size=32" width="20" height="20" alt="" loading="lazy"> {{ ln.name }}</td>
+          <td class="num" data-v="{{ ln.quantity }}">{{ '{:,}'.format(ln.quantity) }}</td>
+          <td class="num" data-v="{{ ln.stacks }}">{{ ln.stacks }}</td>
+          <td class="small" data-v="{{ places[0][0] if places else '' }}">
+            {% if places | length > 1 %}<span class="tip" tabindex="0">{{ places[0][0] }} <span class="pill small">+{{ places | length - 1 }}</span>
+              <span class="tip-body tip-left"><span class="tip-head">{{ places | length }} places</span>
+              {% for p, n in places %}<span class="tip-row"><span>{{ p }}</span><span></span><span class="tip-note">{{ '{:,}'.format(n) }}</span></span>{% endfor %}</span></span>
+            {% elif places %}{{ places[0][0] }}{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="muted">{{ 'No items match.' if total_stacks else 'No assets synced yet.' }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+<script src="/static/tables.js?v={{ ASSET_V }}"></script>
+{{ clip_script() }}
+{% endblock %}
