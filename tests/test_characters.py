@@ -189,7 +189,7 @@ def test_slots_page_shows_capital_pips_tier_and_sync_help(client, seeded):
                               active_level=4))
     seeded.commit()
     html = client.get("/industry/slots").text
-    assert '<span class="tier ">JF &amp; Supers</span>' in html
+    assert '<span class="tier tier-4">JF &amp; Supers</span>' in html
     assert 'class="tip capcell"' in html
     assert "What Sync Now does" in html and "Beat ESI" in html
 

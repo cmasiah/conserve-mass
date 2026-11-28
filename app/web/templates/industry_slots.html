@@ -9,16 +9,17 @@
   {%- else -%}
     {%- set d = detail[r.character.character_id][cat] -%}
     {%- set cap = d.capacity -%}{%- set used = r.used.get(cat, 0) -%}
-    <div class="tip slotcell" tabindex="0">
+    <div class="tip slotcell {{ 'gold' if cap >= gold else ('short' if cap else '') }}" tabindex="0">
       {% if cap %}
-        <div class="nums"><strong>{{ used }}</strong><span class="muted"> / {{ cap }}</span>
+        <div class="nums"><strong>{{ used }}</strong><span class="muted cap-n"> / {{ cap }}</span>
           <span class="small muted">in use</span></div>
         <div class="meter {{ 'full' if used >= cap }}"><span style="width: {{ (used / cap * 100) | round(0) }}%"></span></div>
       {% else %}
         <div class="nums muted">—</div>
       {% endif %}
       <div class="tip-body">
-        <div class="tip-head">{{ labels[cat] }} · {{ cap }} slot{{ 's' if cap != 1 }}{% if cat == 'reactions' and not cap %} (needs Reactions){% endif %}</div>
+        <div class="tip-head">{{ labels[cat] }} · {{ cap }} slot{{ 's' if cap != 1 }}{% if cat == 'reactions' and not cap %} (needs Reactions){% endif %}
+          {%- if cap >= gold %} <span class="gold-badge">★ {{ gold }}+</span>{% elif cap %} <span class="short-note">{{ gold - cap }} short of {{ gold }}</span>{% endif %}</div>
         {% for s in d.rows %}
           <div class="tip-row"><span>{{ s.name }}</span>{{ pips(s.level, s.queued) }}<span class="tip-note">{{ s.note }}</span></div>
         {% endfor %}
@@ -57,12 +58,14 @@
 </div>
 
 <div class="toolbar" style="margin-top:16px">
-  <div class="tabs">
-    <a href="?sort={{ sort }}" class="{{ 'active' if not only }}">All</a>
-    <a href="?sort={{ sort }}&only=manufacturing" class="{{ 'active' if only == 'manufacturing' }}">10+ manufacturing</a>
-    <a href="?sort={{ sort }}&only=science" class="{{ 'active' if only == 'science' }}">10+ research</a>
-    <a href="?sort={{ sort }}&only=reactions" class="{{ 'active' if only == 'reactions' }}">10+ reactions</a>
-    <a href="?sort={{ sort }}&only=capital" class="{{ 'active' if only == 'capital' }}">Capital builders</a>
+  {%- set ds = 'desc' if desc else 'asc' -%}
+  <div class="tabs slot-filters">
+    <a href="?sort={{ sort }}&dir={{ ds }}" class="{{ 'active' if not only }}">All</a>
+    <span class="tab-group">★ {{ gold }}+</span>
+    {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=gold:{{ c }}" class="{{ 'active' if only == 'gold:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ gold_counts[c] }}</span></a>{% endfor %}
+    <span class="tab-group short-label">Under {{ gold }}</span>
+    {% for c in cats %}<a href="?sort={{ sort }}&dir={{ ds }}&only=under:{{ c }}" class="{{ 'active' if only == 'under:' ~ c }}">{{ labels[c] }} <span class="tab-n">{{ under_counts[c] }}</span></a>{% endfor %}
+    <a href="?sort={{ sort }}&dir={{ ds }}&only=capital" class="{{ 'active' if only == 'capital' }}">Capital builders</a>
   </div>
   <span class="spacer"></span>
   <span class="small muted">Hover a slot count for the skills behind it.</span>
@@ -71,11 +74,17 @@
 {% if rows %}
 <table class="slots-table">
   <thead><tr>
-    <th><a href="?sort=name&only={{ only }}">Character</a></th>
-    <th><a href="?sort=manufacturing&only={{ only }}">Manufacturing</a></th>
-    <th><a href="?sort=science&only={{ only }}">Research</a></th>
-    <th><a href="?sort=reactions&only={{ only }}">Reactions</a></th>
-    <th><a href="?sort=capital&only={{ only }}">Capital Construction</a></th>
+    {%- macro sorth(key, label) -%}
+      {%- set active = sort == key -%}
+      {%- set next = ('asc' if desc else 'desc') if active else ('asc' if key == 'name' else 'desc') -%}
+      <th class="{{ 'sorted' if active }}"><a href="?sort={{ key }}&dir={{ next }}&only={{ only }}">{{ label }}
+        <span class="sort-arrow">{{ ('▼' if desc else '▲') if active else '↕' }}</span></a></th>
+    {%- endmacro %}
+    {{ sorth('name', 'Character') }}
+    {{ sorth('manufacturing', 'Manufacturing') }}
+    {{ sorth('science', 'Research') }}
+    {{ sorth('reactions', 'Reactions') }}
+    {{ sorth('capital', 'Capital Construction') }}
     <th>Synced</th>
   </tr></thead>
   <tbody>
@@ -90,14 +99,14 @@
             {%- set capq = r.queued.get('Capital Ship Construction', 0) %}
             <span class="tip capcell" tabindex="0">
               {{ pips(r.capital_level, capq) }}
-              {% if r.capital_level %}<span class="tier {{ 'tier-titan' if r.capital_level >= 5 }}">{{ r.capital_label }}</span>
+              {% if r.capital_level %}<span class="tier tier-{{ r.capital_level }}">{{ r.capital_label }}</span>
               {% else %}<span class="muted small">not trained</span>{% endif %}
               {% if capq > r.capital_level %}<span class="small q-note">→ {{ capq }}</span>{% endif %}
               <span class="tip-body tip-left">
                 <span class="tip-head">Capital Ship Construction</span>
                 <span class="tip-row"><span>Current level</span>{{ pips(r.capital_level, capq) }}<span class="tip-note">{{ 'training to ' ~ capq if capq > r.capital_level else '' }}</span></span>
-                {% for lvl in [1, 3, 4, 5] %}
-                  <span class="tip-row {{ 'tip-done' if r.capital_level >= lvl else 'muted' }}"><span>Level {{ lvl }}</span><span></span><span class="tip-note">{{ tiers[lvl] }}</span></span>
+                {% for lvl, lvl_label, tier_name in tier_rows %}
+                  <span class="tip-row {{ 'tip-done' if r.capital_level >= lvl else 'muted' }}"><span>{{ lvl_label }}</span><span></span><span class="tip-note"><span class="tier tier-{{ lvl }}">{{ tier_name }}</span></span></span>
                 {% endfor %}
               </span>
             </span>

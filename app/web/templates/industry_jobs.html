@@ -12,12 +12,17 @@
 </div>
 <div class="toolbar">
   <div class="tabs">
-    <a href="?who={{ who }}" class="{{ 'active' if not cat }}">All</a>
-    {% for c in cats %}<a href="?cat={{ c }}&who={{ who }}" class="{{ 'active' if cat == c }}">{{ labels[c] }}</a>{% endfor %}
+    <a href="?who={{ who }}&owner={{ owner }}" class="{{ 'active' if not cat }}">All</a>
+    {% for c in cats %}<a href="?cat={{ c }}&who={{ who }}&owner={{ owner }}" class="{{ 'active' if cat == c }}">{{ labels[c] }}</a>{% endfor %}
   </div>
   <span class="spacer"></span>
-  <form method="get">
+  <form method="get" class="inline-filters">
     <input type="hidden" name="cat" value="{{ cat }}">
+    <select name="owner" onchange="this.form.submit()">
+      <option value="" {{ 'selected' if not owner }}>Corp + personal</option>
+      <option value="corporation" {{ 'selected' if owner == 'corporation' }}>Corp jobs</option>
+      <option value="character" {{ 'selected' if owner == 'character' }}>Personal jobs</option>
+    </select>
     <select name="who" onchange="this.form.submit()">
       <option value="0">All installers</option>
       {% for iid, nm in installers %}<option value="{{ iid }}" {{ 'selected' if who == iid }}>{{ nm }}</option>{% endfor %}
