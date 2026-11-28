@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="login">
-  <div class="card">
-    <div class="brand" style="font-size:22px">Conserve Mass</div>
-    <p class="muted">Jump freight operations</p>
+  <div class="card login-card">
+    <img class="login-icon" src="/static/icon.png?v={{ ASSET_V }}" alt="Conserve Mass" width="120" height="120">
+    <p class="muted">Jump freight &amp; industry operations</p>
     {% if missing %}
       <div class="flash error" style="text-align:left">
         Setup incomplete. Add these to <code>/mnt/user/appdata/conserve-mass/.env</code> and restart:

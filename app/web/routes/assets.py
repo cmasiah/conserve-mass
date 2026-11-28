@@ -12,6 +12,7 @@ from app.models import (
 )
 from app.security import require_csrf, require_user
 from app.services import assets as svc
+from app.services.assets import material_lines
 from app.services import industry, sync_info
 from app.services.places import is_system
 from app.web.templating import flash, render
@@ -200,36 +201,6 @@ def watch(request: Request, csrf: str = Form(""), kind: str = Form(""), target: 
 
 
 # ------------------------------------------------------------------ Materials page
-
-def material_lines(db: Session, scope: str) -> tuple[dict[str, list[svc.Line]], list[svc.Line]]:
-    """Totals per material section for watched places (or everything), with targets.
-    Returns (sections, every line)."""
-    stmt = select(Asset.type_id, func.sum(Asset.quantity), func.count()).group_by(Asset.type_id)
-    if scope != "all":
-        stmt = stmt.where(svc.watch_filter(db))
-    totals = {tid: (int(qty or 0), n) for tid, qty, n in db.execute(stmt)}
-    targets = {t.type_id: t for t in db.scalars(select(MaterialTarget))}
-    type_ids = set(totals) | set(targets)
-    infos = {t.type_id: t for t in db.scalars(select(TypeInfo).where(TypeInfo.type_id.in_(type_ids)))}
-    names = svc.type_names(db, type_ids)
-    sections: dict[str, list[svc.Line]] = defaultdict(list)
-    every = []
-    for tid in type_ids:
-        ti = infos.get(tid)
-        group = svc.material_group(ti) if ti else "Not categorized yet"
-        if group is None and tid not in targets:
-            continue  # ships, modules, ... aren't materials
-        qty, n = totals.get(tid, (0, 0))
-        t = targets.get(tid)
-        ln = svc.Line(tid, names.get(tid, f"Type {tid}"), qty, n, group=group or "Other",
-                      min_qty=t.min_qty if t else None, max_qty=t.max_qty if t else None)
-        sections[ln.group].append(ln)
-        every.append(ln)
-    order = [g for g, _gs, _cs in svc.MATERIAL_GROUPS] + [svc.OTHER_MATERIALS, "Other",
-                                                          "Not categorized yet"]
-    ordered = {g: sorted(sections[g], key=lambda x: x.name.lower()) for g in order if sections.get(g)}
-    return ordered, every
-
 
 @router.get("/materials")
 def materials_page(request: Request, scope: str = "watched", db: Session = Depends(get_db)):

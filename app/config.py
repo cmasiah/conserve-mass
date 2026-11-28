@@ -5,7 +5,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_NAME = "Conserve Mass Ops"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 
 
 class Settings(BaseSettings):
