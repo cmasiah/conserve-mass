@@ -82,7 +82,7 @@ def test_recent_builds_beta_only_lists_published_commits(monkeypatch):
     monkeypatch.setattr(version, "_ghcr_tags", fake_tags)
     builds = asyncio.run(version.recent_builds(None, "o/r", commits))
     assert [b["message"] for b in builds] == ["new", "old"]
-    assert builds[0]["current"] and not builds[1]["current"]
+    assert [b["kind"] for b in builds] == ["current", "rollback"]
 
 
 def test_rollback_route_validates_and_writes_the_request(db, tmp_path, monkeypatch):
@@ -115,3 +115,17 @@ def test_rollback_route_validates_and_writes_the_request(db, tmp_path, monkeypat
         version._cache.builds = []
         app.router.routes[:] = [r for r in app.router.routes
                                 if getattr(r, "path", "") != "/__test/login5"]
+
+
+def test_build_list_shows_one_upgrade_the_running_build_and_three_rollbacks():
+    from app.services.version import trim_builds
+    b = [{"tag": f"t{i}", "current": i == 2} for i in range(8)]   # newest first; running = 2
+    out = trim_builds(b)
+    assert [(x["tag"], x["kind"]) for x in out] == [
+        ("t0", "upgrade"), ("t2", "current"), ("t3", "rollback"), ("t4", "rollback"),
+        ("t5", "rollback")]                     # t1 (also newer) is left out
+    b[0]["current"], b[2]["current"] = True, False      # running the newest: no upgrade row
+    assert [x["kind"] for x in trim_builds(b)] == ["current", "rollback", "rollback", "rollback"]
+    for x in b:
+        x["current"] = False                            # running build not listed
+    assert [x["kind"] for x in trim_builds(b)] == ["upgrade", "rollback", "rollback", "rollback"]

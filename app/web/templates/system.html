@@ -122,20 +122,26 @@
   {% elif upd.watcher_version < 2 %}
     <div class="flash error">Rolling back needs the newer host updater script. Press <strong>Update now</strong> once; it installs itself, and these buttons work from then on.</div>
   {% endif %}
-  <style>.builds tr.current td { background: rgba(63,185,80,.06); }</style>
+  <style>.builds tr.current td { background: rgba(63,185,80,.06); } .builds tr.newer td { background: rgba(232,160,60,.06); }</style>
   <table class="builds">
     <thead><tr><th>Build</th><th>What changed</th><th>Published</th><th></th></tr></thead>
     <tbody>
     {% for b in ver.builds %}
-      <tr class="{{ 'current' if b.current }}">
+      <tr class="{{ 'current' if b.kind == 'current' }}{{ ' newer' if b.kind == 'upgrade' }}">
         <td class="mono">{% if b.url %}<a href="{{ b.url }}" target="_blank" rel="noopener">{{ b.label }}</a>{% else %}{{ b.label }}{% endif %}</td>
         <td class="small">{{ b.message or '' }}</td>
         <td class="small muted">{{ b.date | delta(now) if b.date else '' }}</td>
         <td class="num">
-          {% if b.current %}<span class="pill ok small">running</span>
+          {% if b.kind == 'current' %}<span class="pill ok small">running</span>
+          {% elif b.kind == 'upgrade' %}
+            <form class="inline" method="post" action="/system/update-now"
+                  data-confirm="Update to the newest build ({{ b.label }})?&#10;&#10;The app restarts (about 30 seconds offline)."
+                  onsubmit="return confirm(this.dataset.confirm)">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <button class="small primary" {{ '' if upd.installed else 'disabled' }}>Upgrade to this</button></form>
           {% else %}
             <form class="inline" method="post" action="/system/rollback"
-                  data-confirm="Switch to build {{ b.label }}?&#10;&#10;The app restarts (about 30 seconds offline). Database changes made by newer builds stay; they're additive, so older builds run fine on them.&#10;&#10;The next 'Update now' brings you back to the newest {{ 'beta' if ver.channel == 'beta' else 'release' }}."
+                  data-confirm="Roll back to build {{ b.label }}?&#10;&#10;The app restarts (about 30 seconds offline). Database changes made by newer builds stay; they're additive, so older builds run fine on them.&#10;&#10;The next 'Update now' brings you back to the newest {{ 'beta' if ver.channel == 'beta' else 'release' }}."
                   onsubmit="return confirm(this.dataset.confirm)">
               <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="tag" value="{{ b.tag }}">
               <button class="small" {{ '' if can_roll else 'disabled' }}>Roll back to this</button></form>
