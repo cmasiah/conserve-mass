@@ -122,6 +122,7 @@
   {% elif upd.watcher_version < 2 %}
     <div class="flash error">Rolling back needs the newer host updater script. Press <strong>Update now</strong> once; it installs itself, and these buttons work from then on.</div>
   {% endif %}
+  <style>.builds tr.current td { background: rgba(63,185,80,.06); }</style>
   <table class="builds">
     <thead><tr><th>Build</th><th>What changed</th><th>Published</th><th></th></tr></thead>
     <tbody>
