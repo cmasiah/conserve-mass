@@ -17,6 +17,7 @@ from app.jobs import scheduler
 from app.logbuffer import setup_logging
 from app.security import LoginRequired
 from app.web.routes import assets as assets_routes, auth, jump as jump_routes, industry, logs, pages, settings as settings_routes
+from app.web.routes import bulk as bulk_routes
 from app.web.templating import templates
 
 settings = get_settings()
@@ -124,6 +125,7 @@ def healthz():
 
 
 app.include_router(auth.router)
+app.include_router(bulk_routes.router)   # before pages: /contracts/bulk vs /contracts/{id}
 app.include_router(pages.router)
 app.include_router(logs.router)
 app.include_router(industry.router)

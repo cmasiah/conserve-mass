@@ -2,7 +2,8 @@
 {% from "partials/macros.html" import contract_table %}
 {% block title %}Contracts · {{ APP_NAME }}{% endblock %}
 {% block content %}
-<h1>Courier contracts</h1>
+<h1>Hauling Contracts</h1>
+{% include "partials/contract_tabs.html" %}
 <div class="toolbar">
   <div class="tabs">
     {% for key, label in [('open','Open'),('outstanding','Outstanding'),('in_progress','In transit'),('finished','Finished'),('failed','Failed'),('closed','All closed'),('all','All')] %}

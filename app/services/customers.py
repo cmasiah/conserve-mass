@@ -47,7 +47,8 @@ def customer_stats(db: Session, character_id: int | None = None, order: str = "c
             func.max(case((Contract.status.in_(FINISHED), Contract.date_completed))),
             func.max(Contract.date_issued),
         )
-        .outerjoin(Contract, Contract.issuer_id == Customer.character_id)
+        .outerjoin(Contract, (Contract.issuer_id == Customer.character_id)
+                   & (Contract.type == "courier"))
         .group_by(Customer.character_id)
     )
     if character_id is not None:

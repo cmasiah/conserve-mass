@@ -316,6 +316,12 @@ def material_lines(db: Session, scope: str) -> tuple[dict[str, list[Line]], list
     if scope != "all":
         stmt = stmt.where(watch_filter(db))
     totals = {tid: (int(qty or 0), n) for tid, qty, n in db.execute(stmt)}
+    # Goods from open bulk haul jobs are someone else's: leave them out.
+    from app.services.bulk import reserved_quantities
+    for tid, qty in reserved_quantities(db).items():
+        if tid in totals:
+            have, n = totals[tid]
+            totals[tid] = (max(0, have - qty), n)
     targets = {t.type_id: t for t in db.scalars(select(MaterialTarget))}
     type_ids = set(totals) | set(targets)
     infos = {t.type_id: t for t in db.scalars(select(TypeInfo).where(TypeInfo.type_id.in_(type_ids)))}

@@ -142,7 +142,10 @@ def test_contract_updates_are_two_combined_switches(db):
     labels = [sw.label for sw in prefs.SWITCHES if sw.group == "Hauling"]
     assert labels == ["New courier received", "Unaccepted contract expiring soon",
                       "Delivery deadline approaching", "Contract accepted, delivered, or failed",
-                      "Contract cancelled, deleted, or rejected"]
+                      "Contract cancelled, deleted, or rejected", "Bulk job assigned",
+                      "Bulk job contracts expiring soon"]
+    # New kinds start off.
+    assert not prefs.is_enabled(db, "bulk_job") and not prefs.is_enabled(db, "bulk_expiring")
     prefs.save(db, {"kind_status_progress": "1"})          # closed group left off
     for k in ("status_accepted", "status_finished", "status_failed"):
         assert prefs.is_enabled(db, k)

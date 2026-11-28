@@ -1,4 +1,6 @@
-"""Poll corporation contracts from ESI, store courier contracts, emit events + alerts."""
+"""Poll corporation contracts from ESI, store courier and bulk (item exchange) contracts
+assigned to the corp, emit events + alerts. Bulk contracts are grouped into jobs and get
+their own alerts (app/services/bulk.py)."""
 import json
 import logging
 from dataclasses import dataclass, field
@@ -19,6 +21,7 @@ from app.utils import fmt_delta, fmt_isk, fmt_m3
 log = logging.getLogger(__name__)
 
 TRACKED_FIELDS = ("status", "acceptor_id", "date_accepted", "date_completed")
+TRACKED_TYPES = ("courier", "item_exchange")
 ALERT_STATUS_CHANGES = {
     "in_progress": ("📦 Contract accepted", "accepted"),
     "finished": ("✅ Contract delivered", "finished"),
@@ -45,8 +48,9 @@ class ApplyResult:
 
 
 def apply_contract(db: Session, corp_id: int, raw: dict) -> ApplyResult | None:
-    """Upsert one ESI contract row. Returns None if it's not a courier assigned to us."""
-    if raw.get("type") != "courier" or raw.get("assignee_id") != corp_id:
+    """Upsert one ESI contract row. Returns None unless it's a courier or item exchange
+    assigned to us."""
+    if raw.get("type") not in TRACKED_TYPES or raw.get("assignee_id") != corp_id:
         return None
 
     now = utcnow()
@@ -83,6 +87,7 @@ def apply_contract(db: Session, corp_id: int, raw: dict) -> ApplyResult | None:
         "volume_m3": raw.get("volume"),
         "reward_isk": raw.get("reward"),
         "collateral_isk": raw.get("collateral"),
+        "price_isk": raw.get("price"),
         "days_to_complete": raw.get("days_to_complete"),
         "date_issued": _dt(raw.get("date_issued")),
         "date_expired": _dt(raw.get("date_expired")),
@@ -143,7 +148,8 @@ def _summary(c: Contract) -> str:
     if c.deadline:
         lines.append(f"**Deliver by:** {fmt_delta(c.deadline)}")
     if c.customer:
-        delivered = sum(1 for k in c.customer.contracts if k.status in FINISHED)
+        delivered = sum(1 for k in c.customer.contracts
+                        if k.status in FINISHED and k.type == "courier")
         if delivered:
             lines.append(f"🔁 Returning customer — {delivered} delivered contract"
                          f"{'s' if delivered != 1 else ''}")
@@ -160,6 +166,8 @@ def _alert(db: Session, c: Contract, kind: str, title: str) -> None:
 
 def _queue_alerts(db: Session, r: ApplyResult) -> None:
     c = r.contract
+    if c.type != "courier":
+        return  # bulk contracts: one alert per job instead (bulk.py)
     if c.customer and c.customer.silenced:
         return  # muted or blocked issuer: tracked, never pinged
     if r.is_new and c.status == "outstanding" and (
@@ -181,8 +189,10 @@ def detect_spam(db: Session, issuer_ids: set[int]) -> list[Customer]:
         cust = db.get(Customer, issuer_id)
         if cust is None or cust.silenced:
             continue
+        # Couriers only: a bulk job is many contracts at once by design.
         recent = db.scalar(select(func.count()).select_from(Contract).where(
-            Contract.issuer_id == issuer_id, Contract.date_issued >= since))
+            Contract.issuer_id == issuer_id, Contract.date_issued >= since,
+            Contract.type == "courier"))
         if recent <= s.spam_contracts_per_hour:
             continue
         who = cust.name or str(issuer_id)
@@ -210,7 +220,8 @@ def queue_deadline_alerts(db: Session) -> None:
     horizon = utcnow() + timedelta(hours=s.expiry_warning_hours)
     now = utcnow()
     open_contracts = db.scalars(
-        select(Contract).where(Contract.status.in_(["outstanding", "in_progress"]))).all()
+        select(Contract).where(Contract.status.in_(["outstanding", "in_progress"]),
+                               Contract.type == "courier")).all()
     for c in open_contracts:
         if c.customer and c.customer.silenced:
             continue
@@ -231,7 +242,8 @@ def queue_deadline_alerts(db: Session) -> None:
 
 
 def courier_rows(corp_id: int, data: list[dict]) -> list[dict]:
-    return [r for r in data if r.get("type") == "courier" and r.get("assignee_id") == corp_id]
+    """Couriers and bulk (item exchange) contracts assigned to the corp."""
+    return [r for r in data if r.get("type") in TRACKED_TYPES and r.get("assignee_id") == corp_id]
 
 
 def quiet_issuers(db: Session, corp_id: int, rows: list[dict]) -> set[int]:
@@ -244,6 +256,8 @@ def quiet_issuers(db: Session, corp_id: int, rows: list[dict]) -> set[int]:
     new_recent: dict[int, int] = {}
     for r in rows:
         issued = _dt(r.get("date_issued"))
+        if r.get("type") != "courier":
+            continue        # bulk jobs post many contracts at once by design
         if r["contract_id"] not in known and issued and issued >= since:
             new_recent[r["issuer_id"]] = new_recent.get(r["issuer_id"], 0) + 1
     quiet: set[int] = set()
@@ -253,7 +267,8 @@ def quiet_issuers(db: Session, corp_id: int, rows: list[dict]) -> set[int]:
             quiet.add(issuer_id)
         elif issuer_id in new_recent:
             stored = db.scalar(select(func.count()).select_from(Contract).where(
-                Contract.issuer_id == issuer_id, Contract.date_issued >= since))
+                Contract.issuer_id == issuer_id, Contract.date_issued >= since,
+                Contract.type == "courier"))
             if stored + new_recent[issuer_id] > limit:
                 quiet.add(issuer_id)
     return quiet
@@ -335,7 +350,7 @@ async def sync_corporation_contracts() -> None:
                 results = store_batch(db, corp_id, rows, names)
                 state = db.get(SyncState, key)
                 state.etag, state.expires_at = etag, expires
-                log.info("Contracts synced: %d courier rows, %d new, %d changed",
+                log.info("Contracts synced: %d rows (couriers + bulk), %d new, %d changed",
                          len(results), sum(r.is_new for r in results),
                          sum(bool(r.changes) for r in results))
             queue_deadline_alerts(db)
@@ -350,3 +365,11 @@ async def sync_corporation_contracts() -> None:
             state.last_error = f"processing: {type(e).__name__}: {str(e)[:250]}"
             db.add(state)
             db.commit()
+            return
+
+    # Bulk jobs: items, Jita value, grouping, hub, alerts (own short transactions).
+    try:
+        from app.services import bulk
+        await bulk.after_sync(corp_id, token)
+    except Exception:  # noqa: BLE001 — never let bulk processing break courier sync
+        log.exception("Bulk job processing failed")

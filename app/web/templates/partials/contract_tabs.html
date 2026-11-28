@@ -1,0 +1,5 @@
+{#- Couriers | Bulk jobs, at the top of the Hauling Contracts pages. -#}
+<div class="tabs page-tabs">
+  <a href="/contracts" class="{{ 'active' if not request.url.path.startswith('/contracts/bulk') }}">Couriers</a>
+  <a href="/contracts/bulk" class="{{ 'active' if request.url.path.startswith('/contracts/bulk') }}">Bulk jobs{% if open_jobs %} <span class="tab-n">{{ open_jobs }}</span>{% endif %}</a>
+</div>

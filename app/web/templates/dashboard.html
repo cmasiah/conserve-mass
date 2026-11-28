@@ -34,11 +34,27 @@
 <div class="grid">
   <div class="card stat"><div class="label">Awaiting acceptance</div><div class="value">{{ outstanding|length }}</div></div>
   <div class="card stat"><div class="label">In transit</div><div class="value">{{ in_progress|length }}</div></div>
-  <div class="card stat"><div class="label">Collateral at risk</div>
-    <div class="value">{{ in_progress | sum(attribute='collateral_isk') | isk }}</div></div>
+  <div class="card stat" title="Collateral of accepted couriers plus the value of bulk-job goods in your hands"><div class="label">Exposure now</div>
+    <div class="value">{{ exposure.now | isk }}</div>
+    <div class="small muted">{{ exposure.couriers }} courier{{ 's' if exposure.couriers != 1 }}{% if exposure.jobs %} · {{ exposure.jobs }} bulk job{{ 's' if exposure.jobs != 1 }}{% endif %}</div></div>
   <div class="card stat"><div class="label">Delivered (30d)</div><div class="value">{{ done_30d[0] }}</div></div>
   <div class="card stat"><div class="label">Revenue (30d)</div><div class="value">{{ done_30d[1] | isk }}</div></div>
   <div class="card stat"><div class="label">Moved (30d)</div><div class="value">{{ done_30d[2] | m3 }}</div></div>
+  <div class="card stat" title="Collateral of delivered couriers plus delivered bulk jobs"><div class="label">Collateral hauled</div>
+    <div class="value">{{ exposure.hauled_month | isk }}</div>
+    <div class="small muted">this month · {{ exposure.hauled_all | isk }} all time</div></div>
+</div>
+
+<div class="card exposure-card">
+  <div class="exp-head"><strong>Exposure, last 30 days</strong>
+    <span class="small muted">what you were responsible for at the end of each day</span>
+    <span class="spacer"></span>
+    {% if open_jobs %}<a class="small" href="/contracts/bulk">{{ open_jobs }} open bulk job{{ 's' if open_jobs != 1 }} →</a>{% endif %}</div>
+  <div class="exp-bars" role="img" aria-label="Exposure per day, last 30 days">
+    {% for d in exposure.daily %}<span class="exp-bar" style="height: {{ [d.pct, 1] | max }}%" title="{{ d.day.strftime('%b %d') }}: {{ d.isk | isk }}"></span>{% endfor %}
+  </div>
+  {% if top_exposure %}<div class="small exp-top">Most in your hands now:
+    {% for cust, v in top_exposure %}<a href="/customers/{{ cust.character_id }}">{{ cust.name or cust.character_id }}</a> {{ v | isk }}{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
 </div>
 
 <h2>Awaiting acceptance</h2>
