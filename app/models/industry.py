@@ -135,6 +135,7 @@ class Asset(Base):
     location_id: Mapped[int] = mapped_column(BigInteger)          # as ESI gives it
     location_flag: Mapped[str] = mapped_column(String(40), default="")
     is_singleton: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_bpc: Mapped[bool] = mapped_column(Boolean, default=False)   # blueprint copy
     # Worked out from the owner's asset tree:
     site_id: Mapped[int] = mapped_column(BigInteger, index=True)  # station / structure / system
     division: Mapped[str] = mapped_column(String(12), default="")  # CorpSAG1..7, or ""

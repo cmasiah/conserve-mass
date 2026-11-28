@@ -2,13 +2,16 @@
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import PlainTextResponse, RedirectResponse
+import json
+
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db, utcnow
 from app.models import (
-    Asset, AssetNode, AssetWatch, Character, Corporation, Location, MaterialTarget, TypeInfo,
+    Asset, AssetNode, AssetWatch, Character, Corporation, Location, MaterialTarget, Setting,
+    TypeInfo,
 )
 from app.security import require_csrf, require_user
 from app.services import assets as svc
@@ -61,10 +64,32 @@ def container_label(ctx: dict, item_id: int | None) -> str:
     return (n.name if n and n.name else "Container") if n else "Container"
 
 
+# Item kinds for the type filter: ESI category ids, with a name fallback for types whose
+# category hasn't been looked up yet.
+KINDS = {
+    "bp": ("Blueprints", {9}, (" Blueprint",)),
+    "skin": ("SKINs", {91}, (" SKIN",)),
+    "ship": ("Ships", {6}, ()),
+    "module": ("Modules", {7}, ()),
+    "material": ("Materials", {4, 25, 43}, ()),
+}
+
+
+def _who_filter(stmt, who: str):
+    """who: '' everyone, 'corp', 'personal', or 'char:<id>'."""
+    if who == "corp":
+        return stmt.where(Asset.owner_type == "corporation")
+    if who == "personal":
+        return stmt.where(Asset.owner_type == "character")
+    if who.startswith("char:") and who[5:].isdigit():
+        return stmt.where(Asset.owner_type == "character", Asset.owner_id == int(who[5:]))
+    return stmt
+
+
 def _filtered(db: Session, q: str, site: int, owner: str, division: str, container: int,
-              watched: bool):
+              watched: bool, who: str = "", kind: str = ""):
     # Plain columns, not full ORM objects: ~3x faster on 100k stacks.
-    stmt = select(Asset.type_id, Asset.quantity, Asset.site_id)
+    stmt = select(Asset.type_id, Asset.quantity, Asset.site_id, Asset.is_bpc)
     if watched:
         stmt = stmt.where(svc.watch_filter(db))
     if site:
@@ -77,8 +102,20 @@ def _filtered(db: Session, q: str, site: int, owner: str, division: str, contain
         stmt = stmt.where(Asset.division == division)
     if container:
         stmt = stmt.where(Asset.container_path.like(f"%,{container},%"))
+    stmt = _who_filter(stmt, who)
     rows = db.execute(stmt).all()
     names = svc.type_names(db, {a.type_id for a in rows})
+    if kind in KINDS:
+        _label, cats, suffixes = KINDS[kind]
+        cat_of = {t.type_id: t.category_id for t in db.scalars(
+            select(TypeInfo).where(TypeInfo.type_id.in_({a.type_id for a in rows})))}
+
+        def is_kind(tid):
+            c = cat_of.get(tid)
+            if c is not None:
+                return c in cats
+            return any(names.get(tid, "").endswith(sfx) for sfx in suffixes)
+        rows = [a for a in rows if is_kind(a.type_id)]
     if q:
         needle = q.lower()
         rows = [a for a in rows if needle in names.get(a.type_id, "").lower()]
@@ -86,11 +123,14 @@ def _filtered(db: Session, q: str, site: int, owner: str, division: str, contain
 
 
 def _aggregate(rows, names, ctx) -> list[svc.Line]:
-    lines: dict[int, svc.Line] = {}
+    """One line per item type; blueprint copies get their own line, like in game."""
+    lines: dict[tuple[int, bool], svc.Line] = {}
     for a in rows:
-        ln = lines.get(a.type_id)
+        key = (a.type_id, bool(a.is_bpc))
+        ln = lines.get(key)
         if ln is None:
-            ln = lines[a.type_id] = svc.Line(a.type_id, names.get(a.type_id, f"Type {a.type_id}"))
+            name = names.get(a.type_id, f"Type {a.type_id}")
+            ln = lines[key] = svc.Line(a.type_id, name + (" (Copy)" if a.is_bpc else ""))
         ln.quantity += a.quantity
         ln.stacks += 1
         where = site_label(ctx, a.site_id)[0]
@@ -98,9 +138,20 @@ def _aggregate(rows, names, ctx) -> list[svc.Line]:
     return sorted(lines.values(), key=lambda x: x.name.lower())
 
 
+PINS_KEY = "assets:pinned_systems"
+
+
+def pinned(db: Session) -> list[str]:
+    row = db.get(Setting, PINS_KEY)
+    try:
+        return list(json.loads(row.value)) if row else []
+    except ValueError:
+        return []
+
+
 # ------------------------------------------------------------------ places tree
 
-def places_tree(db: Session, ctx: dict) -> list[dict]:
+def places_tree(db: Session, ctx: dict, who: str = "") -> list[dict]:
     """system -> site -> owner/division -> containers, with item counts and watch state."""
     watches = db.scalars(select(AssetWatch)).all()
     w_sys = {w.target_id for w in watches if w.kind == "system"}
@@ -109,9 +160,9 @@ def places_tree(db: Session, ctx: dict) -> list[dict]:
     w_pers = {(w.target_id, w.owner_id) for w in watches if w.kind == "personal"}
     w_cont = {w.target_id for w in watches if w.kind == "container"}
 
-    groups = db.execute(select(
+    groups = db.execute(_who_filter(select(
         Asset.site_id, Asset.owner_type, Asset.owner_id, Asset.division, Asset.container_id,
-        func.count(), func.sum(Asset.quantity)).group_by(
+        func.count(), func.sum(Asset.quantity)), who).group_by(
         Asset.site_id, Asset.owner_type, Asset.owner_id, Asset.division,
         Asset.container_id)).all()
     systems: dict[str, dict] = {}
@@ -137,7 +188,12 @@ def places_tree(db: Session, ctx: dict) -> list[dict]:
         owner["count"] += n
         site["count"] += n
         s["count"] += n
-    out = sorted(systems.values(), key=lambda s: (-s["count"], s["name"]))
+    pins = pinned(db)
+    for s in systems.values():
+        s["pinned"] = s["name"] in pins
+    # Pinned systems first (in the order pinned), then the busiest.
+    out = sorted(systems.values(), key=lambda s: (
+        pins.index(s["name"]) if s["pinned"] else len(pins), -s["count"], s["name"]))
     for s in out:
         s["sites"] = sorted(s["sites"].values(), key=lambda x: (-x["count"], x["name"]))
         for site in s["sites"]:
@@ -149,15 +205,27 @@ def places_tree(db: Session, ctx: dict) -> list[dict]:
 
 # ------------------------------------------------------------------ Assets page
 
+def _owners(db: Session, ctx: dict) -> list[tuple[int, str]]:
+    """Characters that own synced assets, for the owner filter."""
+    ids = db.scalars(select(Asset.owner_id).where(Asset.owner_type == "character").distinct())
+    return sorted(((i, ctx["pilots"].get(i, str(i))) for i in ids), key=lambda x: x[1].lower())
+
+
 @router.get("/assets")
 def assets_page(request: Request, q: str = "", site: int = 0, owner: str = "",
-                division: str = "", container: int = 0, watched: int = 0,
-                db: Session = Depends(get_db)):
+                division: str = "", container: int = 0, watched: int = 0, who: str = "",
+                kind: str = "", db: Session = Depends(get_db)):
     ctx = _context(db)
-    rows, names = _filtered(db, q, site, owner, division, container, bool(watched))
+    kind = kind if kind in KINDS else ""
+    rows, names = _filtered(db, q, site, owner, division, container, bool(watched), who, kind)
     lines = _aggregate(rows, names, ctx)
     total_stacks = db.scalar(select(func.count()).select_from(Asset)) or 0
     scope = []
+    if who:
+        scope.append({"corp": "Corp hangars", "personal": "Personal"}.get(
+            who, ctx["pilots"].get(int(who[5:]), who) if who[5:].isdigit() else who))
+    if kind:
+        scope.append(KINDS[kind][0])
     if watched:
         scope.append("watched places")
     if site:
@@ -169,8 +237,9 @@ def assets_page(request: Request, q: str = "", site: int = 0, owner: str = "",
         scope.append(container_label(ctx, container))
     return render(request, "industry_assets.html", lines=lines[:MAX_LINES],
                   more=max(0, len(lines) - MAX_LINES), shown_stacks=len(rows),
-                  total_stacks=total_stacks, tree=places_tree(db, ctx), q=q, site=site,
+                  total_stacks=total_stacks, tree=places_tree(db, ctx, who), q=q, site=site,
                   owner=owner, division=division, container=container, watched=watched,
+                  who=who, kind=kind, kinds=KINDS, owners=_owners(db, ctx),
                   scope=scope, clip=svc.clipboard_text([(ln.name, ln.quantity) for ln in lines]),
                   watch_count=db.scalar(select(func.count()).select_from(AssetWatch)) or 0,
                   now=utcnow(), sync_feeds=sync_info.feeds(db, "industry"))
@@ -178,10 +247,17 @@ def assets_page(request: Request, q: str = "", site: int = 0, owner: str = "",
 
 @router.get("/assets/export.txt", response_class=PlainTextResponse)
 def assets_export(q: str = "", site: int = 0, owner: str = "", division: str = "",
-                  container: int = 0, watched: int = 0, db: Session = Depends(get_db)):
+                  container: int = 0, watched: int = 0, who: str = "", kind: str = "",
+                  db: Session = Depends(get_db)):
     """The same selection as the page, as `Name Quantity` lines (for other tools)."""
-    rows, names = _filtered(db, q, site, owner, division, container, bool(watched))
+    rows, names = _filtered(db, q, site, owner, division, container, bool(watched), who,
+                            kind if kind in KINDS else "")
     return svc.clipboard_text([(ln.name, ln.quantity) for ln in _aggregate(rows, names, _context(db))])
+
+
+def _quiet(request: Request) -> bool:
+    """A background (fetch) request from the page: answer with JSON, no flash, no reload."""
+    return request.headers.get("x-requested-with") == "fetch"
 
 
 @router.post("/assets/watch")
@@ -190,12 +266,34 @@ def watch(request: Request, csrf: str = Form(""), kind: str = Form(""), target: 
           back: str = Form("/industry/assets"), db: Session = Depends(get_db)):
     require_csrf(request, csrf)
     if kind not in ("system", "site", "division", "personal", "container") or not target:
+        if _quiet(request):
+            return JSONResponse({"ok": False, "error": "Unknown place."}, status_code=400)
         flash(request, "Unknown place.", "error")
     else:
         on = svc.toggle_watch(db, kind, target, owner_id or None, division, label)
         db.commit()
+        if _quiet(request):
+            return JSONResponse({"ok": True, "on": on})
         flash(request, f"{'Watching' if on else 'Stopped watching'} {label or 'that place'}."
                        + (" It now counts toward Materials." if on else ""))
+    return RedirectResponse(back if back.startswith("/industry/") else "/industry/assets",
+                            status_code=303)
+
+
+@router.post("/assets/pin")
+def pin(request: Request, csrf: str = Form(""), system: str = Form(""),
+        back: str = Form("/industry/assets"), db: Session = Depends(get_db)):
+    """Pin a system to the top of the places list (or unpin it)."""
+    require_csrf(request, csrf)
+    pins = pinned(db)
+    on = system not in pins
+    pins = pins + [system] if on else [p for p in pins if p != system]
+    row = db.get(Setting, PINS_KEY) or Setting(key=PINS_KEY, value="[]")
+    row.value = json.dumps(pins)
+    db.merge(row)
+    db.commit()
+    if _quiet(request):
+        return JSONResponse({"ok": True, "on": on})
     return RedirectResponse(back if back.startswith("/industry/") else "/industry/assets",
                             status_code=303)
 

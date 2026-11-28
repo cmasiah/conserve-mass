@@ -254,3 +254,56 @@ def test_materials_page_and_saving_targets_with_k_m_suffixes(client, db):
     html = client.get("/industry/materials").text
     assert "buy 4,000,000" in html
     assert client.get("/industry/materials/export.txt?list=shopping").text == "Tritanium 4000000"
+
+
+def test_blueprint_quantity_codes_become_one_each_and_copies_are_listed_apart(client, db):
+    """ESI gives blueprints quantity -1 (original) / -2 (copy). They must count as 1 each."""
+    from app.models import Asset, EntityName, TypeInfo
+    from app.services.assets import store
+    store(db, "character", 7, [
+        _a(50, 23919, TATARA, "Hangar", -1, True),       # Avatar Blueprint (original)
+        _a(51, 23919, TATARA, "Hangar", -2, True),       # Avatar Blueprint (copy)
+        _a(52, 23919, TATARA, "Hangar", -2, True),
+        _a(53, 60000, TATARA, "Hangar", 3),              # a SKIN, category not looked up
+        _a(54, 34, TATARA, "Hangar", 500),
+    ])
+    db.add_all([EntityName(entity_id=23919, name="Avatar Blueprint", category="inventory_type"),
+                EntityName(entity_id=60000, name="Nomad Kopis Edge SKIN", category="inventory_type"),
+                EntityName(entity_id=34, name="Tritanium", category="inventory_type"),
+                TypeInfo(type_id=23919, name="Avatar Blueprint", category_id=9)])
+    db.commit()
+    assert {a.quantity for a in db.query(Asset).filter(Asset.type_id == 23919)} == {1}
+    assert db.query(Asset).filter(Asset.is_bpc.is_(True)).count() == 2
+    html = client.get("/industry/assets?kind=bp").text
+    assert "Avatar Blueprint (Copy)" in html and "Tritanium" not in html
+    assert ">Blueprints</a>" in html and 'class="chip on"' in html
+    export = client.get("/industry/assets/export.txt").text
+    assert "Avatar Blueprint 1" in export and "Avatar Blueprint (Copy) 2" in export
+    skins = client.get("/industry/assets?kind=skin").text
+    assert "Nomad Kopis Edge SKIN" in skins and "Avatar Blueprint" not in skins
+
+
+def test_owner_filter_pins_and_quiet_watch(client, db):
+    from app.models import Character, Location
+    _store(db)
+    db.add(Character(character_id=7, name="Hauler Seven", corporation_id=CORP))
+    db.add(Location(location_id=TATARA, name="AC2E-3 - Tatara", system_id=30002001,
+                    system_name="AC2E-3", kind="structure"))
+    db.commit()
+    corp_only = client.get("/industry/assets?who=corp").text
+    personal = client.get("/industry/assets?who=char:7").text
+    assert "Hauler Seven (personal)" in personal and "Hauler Seven (personal)" not in corp_only
+    assert '<option value="char:7"' in personal and "Find a structure" in personal
+    # Pin a system: it's listed first and marked.
+    r = client.post("/industry/assets/pin", data={"csrf": "t", "system": "AC2E-3"},
+                    headers={"X-Requested-With": "fetch"})
+    assert r.json() == {"ok": True, "on": True}
+    html = client.get("/industry/assets").text
+    assert html.index('data-sys="AC2E-3"') < html.index('data-sys="', html.index("places-tree") + 1) + 1
+    assert 'class="place-sys pinned"' in html
+    # A star from the page saves without a redirect or a flash message.
+    r = client.post("/industry/assets/watch", data={
+        "csrf": "t", "kind": "site", "target": TATARA, "label": "Tatara"},
+        headers={"X-Requested-With": "fetch"})
+    assert r.status_code == 200 and r.json() == {"ok": True, "on": True}
+    assert "Watching Tatara" not in client.get("/industry/assets").text

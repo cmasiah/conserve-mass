@@ -6,11 +6,11 @@
 {% block content %}
 {%- set here = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') -%}
 {%- macro link(site=0, owner='', division='', container=0) -%}
-/industry/assets?site={{ site }}&owner={{ owner }}&division={{ division }}&container={{ container }}&watched={{ watched }}&q={{ q | urlencode }}
+/industry/assets?site={{ site }}&owner={{ owner }}&division={{ division }}&container={{ container }}&watched={{ watched }}&who={{ who }}&kind={{ kind }}&q={{ q | urlencode }}
 {%- endmacro %}
 <div class="toolbar">
   <h1 style="margin:0">Assets</h1>
-  <span class="small muted">{{ total_stacks }} stacks tracked · {{ watch_count }} watched place{{ 's' if watch_count != 1 }}</span>
+  <span class="small muted">{{ total_stacks }} stacks tracked · <span class="watch-count">{{ watch_count }} watched place{{ 's' if watch_count != 1 }}</span></span>
   <span class="spacer"></span>
   <a class="btn" href="/industry/materials">Materials →</a>
   {{ sync_now(sync_feeds, "/industry/sync-now", csrf, now, back="/industry/assets") }}
@@ -20,25 +20,50 @@
   <aside class="card places">
     <div class="places-head">
       <strong>Places</strong>
-      <span class="small muted">☆ = watch for stockpiles</span>
+      <span class="spacer"></span>
+      <button type="button" class="small" data-tree="expand" title="Open every system and structure">Expand all</button>
+      <button type="button" class="small" data-tree="collapse" title="Close everything">Collapse all</button>
     </div>
+    <div class="places-tools">
+      <input type="search" id="place-q" placeholder="Find a structure, division or container…" autocomplete="off">
+      <form method="get" class="who-form">
+        {% for k, v in [('q', q), ('kind', kind), ('watched', watched)] %}{% if v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+        <select name="who" onchange="this.form.submit()" title="Whose assets to show">
+          <option value="" {{ 'selected' if not who }}>Everyone's</option>
+          <option value="corp" {{ 'selected' if who == 'corp' }}>Corp hangars only</option>
+          <option value="personal" {{ 'selected' if who == 'personal' }}>Personal only (all characters)</option>
+          {% if owners %}<optgroup label="One character">
+            {% for cid, name in owners %}<option value="char:{{ cid }}" {{ 'selected' if who == 'char:' ~ cid }}>{{ name }}</option>{% endfor %}
+          </optgroup>{% endif %}
+        </select>
+      </form>
+    </div>
+    <div class="small muted places-hint">☆ watch for stockpiles · 📌 pin a system to the top</div>
+    <div id="places-tree" class="places-tree">
     {% for s in tree %}
-      <section class="fold open place-sys">
-        <button type="button" class="fold-head">
-          <svg class="fold-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
-          <span class="fold-title">{{ s.name }}</span><span class="pill small">{{ s.count }}</span>
-        </button>
-        {% if s.system_id %}<span class="sys-watch">{{ watch_btn(csrf, 'system', s.system_id, s.name ~ ' (whole system)', s.watched, here) }}</span>{% endif %}
-        <div class="fold-body">
+      <section class="place-sys {{ 'pinned' if s.pinned }}" data-sys="{{ s.name }}" data-text="{{ s.name | lower }}">
+        <div class="sys-head">
+          <button type="button" class="sys-toggle" aria-expanded="true">
+            <svg class="fold-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            <span class="fold-title">{{ s.name }}</span><span class="pill small">{{ s.count }}</span>
+          </button>
+          <form class="inline pin-form" method="post" action="/industry/assets/pin">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="system" value="{{ s.name }}">
+            <input type="hidden" name="back" value="{{ here }}">
+            <button class="pin {{ 'on' if s.pinned }}" title="{{ 'Unpin' if s.pinned else 'Pin to the top' }}: {{ s.name }}" aria-pressed="{{ 'true' if s.pinned else 'false' }}">📌</button>
+          </form>
+          {% if s.system_id %}{{ watch_btn(csrf, 'system', s.system_id, s.name ~ ' (whole system)', s.watched, here) }}{% endif %}
+        </div>
+        <div class="sys-body">
         {% for st in s.sites %}
-          <details class="place-site" {{ 'open' if st.id == site else '' }}>
+          <details class="place-site" data-site="{{ st.id }}" data-text="{{ st.name | lower }}" {{ 'open' if st.id == site else '' }}>
             <summary>
               {{ watch_btn(csrf, 'site', st.id, st.name, st.watched, here, covered_by=s.name if s.watched else '') }}
               <a href="{{ link(site=st.id) }}" class="{{ 'sel' if st.id == site and not owner }}">{{ st.name }}</a>
               <span class="muted small">{{ st.count }}</span>
             </summary>
             {% for o in st.owners %}
-              <div class="place-owner">
+              <div class="place-owner" data-text="{{ o.label | lower }}">
                 {% if o.type == 'corporation' and o.division %}
                   {{ watch_btn(csrf, 'division', st.id, st.name ~ ' › ' ~ o.label, o.watched, here, o.id, o.division, covered_by=(st.name if st.watched else (s.name if s.watched else ''))) }}
                 {% elif o.type == 'character' %}
@@ -49,7 +74,7 @@
                 <span class="muted small">{{ o.count }}</span>
               </div>
               {% for c in o.containers %}
-                <div class="place-cont">
+                <div class="place-cont" data-text="{{ c.label | lower }}">
                   {{ watch_btn(csrf, 'container', c.id, st.name ~ ' › ' ~ c.label, c.watched, here, covered_by=(o.label if o.watched else (st.name if st.watched else (s.name if s.watched else '')))) }}
                   <a href="{{ link(site=st.id, owner=o.type ~ ':' ~ o.id, division=o.division, container=c.id) }}"
                      class="{{ 'sel' if container == c.id }}">📦 {{ c.label }}</a>
@@ -62,9 +87,11 @@
         </div>
       </section>
     {% else %}
-      <p class="small muted">Nothing synced yet. Assets sync hourly for characters with the <strong>Assets</strong>
-        switch on (Characters page) and for switched-on corps through a Director+ character.</p>
+      <p class="small muted">{% if who %}Nothing for this owner. <a href="/industry/assets">Show everyone's</a>.{% else %}Nothing synced yet. Assets sync hourly for characters with the <strong>Assets</strong>
+        switch on (Characters page) and for switched-on corps through a Director+ character.{% endif %}</p>
     {% endfor %}
+    <p class="small muted place-none" hidden>No structure, division or container matches.</p>
+    </div>
   </aside>
 
   <section class="items">
@@ -72,13 +99,19 @@
       <input type="search" name="q" value="{{ q }}" placeholder="Search item name…" autofocus>
       <input type="hidden" name="site" value="{{ site }}"><input type="hidden" name="owner" value="{{ owner }}">
       <input type="hidden" name="division" value="{{ division }}"><input type="hidden" name="container" value="{{ container }}">
+      <input type="hidden" name="who" value="{{ who }}"><input type="hidden" name="kind" value="{{ kind }}">
       <label class="small check"><input type="checkbox" name="watched" value="1" {{ 'checked' if watched }} onchange="this.form.submit()"> Watched places only</label>
       <button>Search</button>
-      {% if q or site or owner or container or watched %}<a class="small" href="/industry/assets">Clear</a>{% endif %}
+      {% if q or site or owner or container or watched or who or kind %}<a class="small" href="/industry/assets">Clear</a>{% endif %}
       <span class="spacer"></span>
       {{ copy_button(clip, "Copy list", "primary") }}
       <a class="small" href="/industry/assets/export.txt?{{ request.url.query }}" title="Same list as plain text, for other tools">.txt</a>
     </form>
+    <div class="kind-chips">
+      {%- macro kind_link(k) -%}/industry/assets?site={{ site }}&owner={{ owner }}&division={{ division }}&container={{ container }}&watched={{ watched }}&who={{ who }}&kind={{ k }}&q={{ q | urlencode }}{%- endmacro %}
+      <a class="chip {{ 'on' if not kind }}" href="{{ kind_link('') }}">All items</a>
+      {% for key, spec in kinds.items() %}<a class="chip {{ 'on' if kind == key }}" href="{{ kind_link(key) }}">{{ spec[0] }}</a>{% endfor %}
+    </div>
     <div class="small muted scope">
       Showing {{ lines | length }}{% if more %} of {{ lines | length + more }}{% endif %} item types · {{ shown_stacks }} stacks
       {% if scope %} in <strong>{{ scope | join(' › ') }}</strong>{% else %} across everything{% endif %}
@@ -108,5 +141,6 @@
   </section>
 </div>
 <script src="/static/tables.js?v={{ ASSET_V }}"></script>
+<script src="/static/assets.js?v={{ ASSET_V }}"></script>
 {{ clip_script() }}
 {% endblock %}

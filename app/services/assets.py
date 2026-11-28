@@ -56,9 +56,12 @@ def place_rows(owner_type: str, owner_id: int, raw: list[dict]) -> list[dict]:
                 division = pflag
             loc = parent["location_id"]
         path.reverse()          # outermost first
+        # ESI codes a blueprint's quantity: -1 = original, -2 = copy (each is one item).
+        qty = a.get("quantity", 1)
+        is_bpc = bool(a.get("is_blueprint_copy")) or qty == -2
         out.append({
             "item_id": a["item_id"], "owner_type": owner_type, "owner_id": owner_id,
-            "type_id": a["type_id"], "quantity": a.get("quantity", 1),
+            "type_id": a["type_id"], "quantity": qty if qty > 0 else 1, "is_bpc": is_bpc,
             "location_id": a["location_id"], "location_flag": a.get("location_flag", ""),
             "is_singleton": bool(a.get("is_singleton")), "site_id": loc, "division": division,
             "container_id": path[-1] if path else None,
