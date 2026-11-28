@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block title %}Jump Planner · {{ APP_NAME }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/jump.css?v={{ ASSET_V }}">{% endblock %}
+{% block content %}
+{%- macro isk_fuel(units, p) -%}
+  {%- set price = prices.get(p.fuel_type, 0) if p else 0 -%}
+  {{ '{:,}'.format(units) }} <span class="muted small">{{ p.fuel_name if p else '' }}{% if price %} · {{ (units * price) | isk }}{% endif %}</span>
+{%- endmacro %}
+<div class="toolbar">
+  <h1 style="margin:0">Jump Planner</h1>
+  <div class="tabs">
+    {% for key, label in [('route', 'Route'), ('lanes', 'Courier lanes'), ('pilots', 'Pilots & ships'), ('cynos', 'Cyno points')] %}
+      <a href="?tab={{ key }}{{ '&pilot=' ~ chosen.character_id if chosen }}" class="{{ 'active' if tab == key }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if not status.systems or status.state == 'running' %}
+<div class="card map-card">
+  {% if status.state == 'running' %}
+    <strong>Downloading the star map…</strong> {{ status.done or 0 }} / {{ status.total or '?' }} systems.
+    <div class="meter"><span style="width: {{ ((status.done or 0) / (status.total or 1) * 100) | round(0) }}%"></span></div>
+    <span class="small muted">Refresh this page to see progress. Planning works once it's finished.</span>
+  {% else %}
+    <strong>The planner needs the star map first.</strong>
+    <span class="small muted">Every k-space system's position and security, from ESI. One time, a few minutes
+      (about 6,500 public lookups); after that it's stored locally.</span>
+    {% if status.state == 'failed' %}<div class="small bad-text">Last attempt failed: {{ status.error }}</div>{% endif %}
+    <form method="post" action="/jump/map/import" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="primary">Download star map</button></form>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if tab in ('route', 'lanes') %}
+<form method="get" class="card plan-form">
+  <input type="hidden" name="tab" value="{{ tab }}">
+  <label>Pilot
+    <select name="pilot" onchange="this.form.submit()">
+      {% for p in ready %}<option value="{{ p.character_id }}" {{ 'selected' if chosen and p.character_id == chosen.character_id }}>{{ p.name }} · {{ p.ship_name }}</option>
+      {% else %}<option value="">No JF pilots set up yet</option>{% endfor %}
+    </select></label>
+  {% if tab == 'route' %}
+    <label>From <input name="frm" value="{{ frm }}" list="systems" placeholder="e.g. Jita" required></label>
+    <label>To <input name="to" value="{{ to }}" list="systems" placeholder="e.g. AC2E-3" required></label>
+  {% endif %}
+  <label class="check"><input type="checkbox" name="cynos" value="1" {{ 'checked' if cynos }}> Only via my cyno points</label>
+  <button class="primary">{{ 'Plan route' if tab == 'route' else 'Update' }}</button>
+  {% if chosen %}
+    <span class="pilot-stats small">
+      <span><strong>{{ '%.2f' | format(chosen.range_ly) }}</strong> LY range</span>
+      <span><strong>{{ '{:,.0f}'.format(chosen.fuel_per_ly) }}</strong> {{ chosen.fuel_name }}/LY</span>
+      <span><strong>{{ '{:,.0f}'.format(chosen.cargo_m3) }}</strong> m³</span>
+      {% if chosen.max_collateral %}<span>≤ {{ chosen.max_collateral | isk }} collateral</span>{% endif %}
+    </span>
+  {% elif not profiles %}
+    <span class="small muted">Add your JF pilots on <a href="?tab=pilots">Pilots &amp; ships</a>.</span>
+  {% endif %}
+</form>
+{% endif %}
+
+{% if tab == 'route' and route %}
+  {% if route.error %}<div class="flash error">{{ route.error }}</div>
+  {% else %}
+  <div class="route-sum">
+    <div class="kpi"><span class="kpi-v">{{ route.jumps }}</span><span class="kpi-l">jump{{ 's' if route.jumps != 1 }}</span></div>
+    <div class="kpi"><span class="kpi-v">{{ '%.2f' | format(route.total_ly) }}</span><span class="kpi-l">light years</span></div>
+    <div class="kpi"><span class="kpi-v">{{ '{:,}'.format(route.fuel) }}</span><span class="kpi-l">{{ chosen.fuel_name }}</span>
+      {% if prices.get(chosen.fuel_type) %}<span class="kpi-s">{{ (route.fuel * prices[chosen.fuel_type]) | isk }} at average price</span>{% endif %}</div>
+    {% if route.landing %}<div class="kpi"><span class="kpi-v">{{ route.gate_jumps if route.gate_jumps is not none else '?' }}</span><span class="kpi-l">gates after landing</span>
+      <span class="kpi-s">{{ route.dest.name }} is high-sec</span></div>{% endif %}
+  </div>
+  <table class="route-table">
+    <thead><tr><th>#</th><th>From</th><th></th><th>To</th><th class="num">Distance</th><th class="num">Fuel</th></tr></thead>
+    <tbody>
+    {% for leg in route.legs %}
+      <tr><td class="muted">{{ loop.index }}</td>
+        <td>{{ leg.frm.name }} <span class="sec {{ 'hs' if leg.frm.security >= 0.45 else ('ls' if leg.frm.security > 0 else 'ns') }}">{{ '%.1f' | format(leg.frm.security) }}</span></td>
+        <td class="muted">⟶</td>
+        <td><strong>{{ leg.to.name }}</strong> <span class="sec {{ 'ls' if leg.to.security > 0 else 'ns' }}">{{ '%.1f' | format(leg.to.security) }}</span>
+          <span class="muted small">{{ leg.to.region_name or '' }}</span></td>
+        <td class="num">{{ '%.2f' | format(leg.ly) }} LY
+          <span class="ly-bar"><span style="width: {{ (leg.ly / chosen.range_ly * 100) | round(0) }}%"></span></span></td>
+        <td class="num">{{ isk_fuel(leg.fuel, chosen) }}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">Already there.</td></tr>{% endfor %}
+    {% if route.landing %}
+      <tr class="gate-row"><td class="muted">⛩</td><td colspan="5">Then <strong>{{ route.gate_jumps if route.gate_jumps is not none else 'some' }} gate jump{{ 's' if route.gate_jumps != 1 }}</strong>
+        from {{ route.landing.name }} to {{ route.dest.name }} (high-sec can't be jumped into).</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+  <p class="small muted">Fewest jumps first, then the shortest total distance (least fuel). Jump fatigue isn't
+    shown: CCP doesn't expose your current fatigue timer.</p>
+  {% endif %}
+{% endif %}
+
+{% if tab == 'lanes' %}
+  {% if not lanes %}<p class="muted">No open courier contracts with known pickup and drop systems.</p>{% endif %}
+  {% for ln in lanes %}
+  <section class="fold lane {{ 'open' if loop.index <= 3 }}">
+    <button type="button" class="fold-head">
+      <svg class="fold-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      <span class="fold-title">{{ ln.start.name }} → {{ ln.end.name }}</span>
+      <span class="pill small">{{ ln.contracts | length }} contract{{ 's' if ln.contracts | length != 1 }}</span>
+      {% if ln.route and not ln.route.error %}<span class="pill info small">{{ ln.route.jumps }} jump{{ 's' if ln.route.jumps != 1 }}{{ ' + gates' if ln.route.landing }}</span>{% endif %}
+      <span class="spacer"></span>
+      <span class="small">{{ ln.reward | isk }} · {{ '{:,.0f}'.format(ln.volume) }} m³</span>
+      {% if ln.per_jump %}<span class="pill ok small">{{ ln.per_jump | isk }}/jump</span>{% endif %}
+    </button>
+    <div class="fold-body">
+      {% if ln.route and ln.route.error %}<div class="small bad-text">{{ ln.route.error }}</div>
+      {% elif ln.route %}
+        <div class="small muted">Route: {{ ln.start.name }}{% for leg in ln.route.legs %} → {{ leg.to.name }}{% endfor %}{% if ln.route.landing %} ⛩ gates to {{ ln.end.name }} (high-sec; the Route tab counts them){% endif %}
+          · {{ '%.2f' | format(ln.route.total_ly) }} LY · {{ isk_fuel(ln.route.fuel, chosen) }} per trip</div>
+      {% endif %}
+      {% for t in ln.trips %}
+        <div class="trip">
+          <div class="trip-head"><strong>Trip {{ loop.index }}</strong>
+            <span class="small">{{ t.contracts | length }} contract{{ 's' if t.contracts | length != 1 }} · {{ '{:,.0f}'.format(t.volume) }} / {{ '{:,.0f}'.format(chosen.cargo_m3) }} m³
+              · {{ t.collateral | isk }} collateral · <strong>{{ t.reward | isk }}</strong></span>
+            <span class="meter trip-fill"><span style="width: {{ (t.volume / chosen.cargo_m3 * 100) | round(0) if chosen.cargo_m3 else 0 }}%"></span></span></div>
+          {% for c in t.contracts %}
+            <a class="trip-line small" href="/contracts/{{ c.contract_id }}"><span>{{ c.customer.name if c.customer and c.customer.name else c.issuer_id }}
+              <span class="muted">· {{ c.status | replace('_', ' ') }}</span></span>
+              <span>{{ '{:,.0f}'.format(c.volume_m3 or 0) }} m³ · {{ (c.reward_isk or 0) | isk }}</span></a>
+          {% endfor %}
+        </div>
+      {% endfor %}
+      {% if ln.unfit %}<div class="small warn-text">{{ ln.unfit | length }} contract{{ 's' if ln.unfit | length != 1 }} too large or over the collateral limit for this pilot.</div>{% endif %}
+    </div>
+  </section>
+  {% endfor %}
+{% endif %}
+
+{% if tab == 'pilots' %}
+  <div class="toolbar">
+    <form method="post" action="/jump/pilots/add" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <select name="character_id">{% for c in candidates %}<option value="{{ c.character_id }}">{{ c.name }}</option>{% endfor %}</select>
+      <button {{ 'disabled' if not candidates }}>+ Add JF pilot</button></form>
+    <span class="spacer"></span>
+    <form method="post" action="/jump/pilots/refresh" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button title="Reload the JF hulls' base stats from ESI">Refresh ship data</button></form>
+  </div>
+  {% for p in profiles %}{% set jp = pilot_rows[p.character_id] %}
+  <form method="post" action="/jump/pilots/{{ p.character_id }}" class="card pilot-card">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="pilot-head">
+      <img src="https://images.evetech.net/characters/{{ p.character_id }}/portrait?size=64" width="40" height="40" alt="">
+      <div><strong>{{ p.name }}</strong><div class="small muted">{{ p.ship_name or 'No ship picked' }}</div></div>
+      <span class="spacer"></span>
+      <label class="check small"><input type="checkbox" name="enabled" value="1" {{ 'checked' if jp.enabled }}> In planner</label>
+    </div>
+    {% for msg in p.problems %}<div class="small warn-text">{{ msg }}</div>{% endfor %}
+    <div class="pilot-grid">
+      <div>
+        <div class="sub">Ship</div>
+        <select name="ship_type_id">
+          <option value="">Detect from assets</option>
+          {% for name, tid in jf_types.items() %}<option value="{{ tid }}" {{ 'selected' if jp.ship_type_id == tid }}>{{ name }}</option>{% endfor %}
+        </select>
+        <div class="sub">Low slots</div>
+        <select name="fit">
+          <option value="auto" {{ 'selected' if p.fit_source != 'manual' }}>From its fit{{ ' (' ~ p.economizers ~ ' econ, ' ~ p.expanders ~ ' cargo)' if p.fit_source == 'assets' }}</option>
+          {% for e in range(4) %}<option value="{{ e }}:{{ 3 - e }}" {{ 'selected' if p.fit_source == 'manual' and p.economizers == e }}>{{ e }} economizer{{ 's' if e != 1 }} + {{ 3 - e }} cargo expander{{ 's' if 3 - e != 1 }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <div class="sub">Skills</div>
+        {% for name, lvl in p.skills.items() %}
+          <div class="skill-line small"><span>{{ name }}</span><span class="pips">{% for i in range(5) %}<i class="{{ 'on' if i < lvl }}"></i>{% endfor %}</span></div>
+        {% endfor %}
+      </div>
+      <div>
+        <div class="sub">Result <span class="muted">(override with the fitting window's numbers)</span></div>
+        {% for attr, label, unit, ov in [('range_ly', 'Max range', 'LY', jp.range_override), ('fuel_per_ly', 'Fuel per LY', p.fuel_name, jp.fuel_override), ('cargo_m3', 'Cargo', 'm³', jp.cargo_override)] %}
+          <label class="result-line small"><span>{{ label }}</span>
+            <input name="{{ attr.split('_')[0] }}_override" value="{{ ov if ov else '' }}"
+                   placeholder="{{ ('%.2f' | format(p[attr])) if attr == 'range_ly' else '{:,.0f}'.format(p[attr]) }}">
+            <span class="muted">{{ unit }}{% if attr in p.overridden %} · <strong>manual</strong>{% endif %}</span></label>
+        {% endfor %}
+        <label class="result-line small"><span>Max collateral</span>
+          <input name="max_collateral" value="{{ '{:,.0f}'.format(jp.max_collateral) if jp.max_collateral else '' }}" placeholder="no limit">
+          <span class="muted">ISK per trip</span></label>
+      </div>
+    </div>
+    <div class="pilot-actions">
+      <button name="remove" value="1" class="small subtle" onclick="return confirm('Remove {{ p.name | e }} from JF pilots?')">Remove</button>
+      <span class="spacer"></span><button class="primary">Save</button>
+    </div>
+  </form>
+  {% else %}<p class="muted">No JF pilots yet. Add the characters who fly jump freighters.</p>{% endfor %}
+
+  <section class="fold">
+    <button type="button" class="fold-head">
+      <svg class="fold-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      <span class="fold-title">Bonus values</span><span class="small muted">used to work out range, fuel and cargo from skills and modules</span>
+    </button>
+    <div class="fold-body">
+      <form method="post" action="/jump/bonuses" class="card bonus-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <p class="small muted">Defaults are the usual values. If the planner's numbers don't match a pilot's fitting
+          window, either correct these percentages or type the real numbers into that pilot's Result fields.</p>
+        {% for k, label in bonus_labels.items() %}
+          <label class="result-line small"><span>{{ label }}</span>
+            <input name="{{ k }}" value="{{ '%g' | format(bonus[k] * 100) }}"><span class="muted">%</span></label>
+        {% endfor %}
+        <button class="primary">Save bonus values</button>
+      </form>
+    </div>
+  </section>
+{% endif %}
+
+{% if tab == 'cynos' %}
+  <form method="post" action="/jump/cynos/add" class="card plan-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>System <input name="system" list="systems" placeholder="low/null-sec system" required></label>
+    <label>Note <input name="label" placeholder="e.g. cyno alt, Pharolux beacon"></label>
+    <button class="primary">Add cyno point</button>
+  </form>
+  <p class="small muted">With "Only via my cyno points" ticked, routes only jump to these systems (plus your
+    destination). Without it, any low or null-sec system counts.</p>
+  <table>
+    <thead><tr><th>System</th><th>Region</th><th>Security</th><th>Note</th><th></th></tr></thead>
+    <tbody>
+    {% for cp, s in cyno_points %}
+      <tr><td>{{ s.name if s else cp.system_id }}</td><td class="small">{{ s.region_name if s else '' }}</td>
+        <td>{% if s %}<span class="sec {{ 'ls' if s.security > 0 else 'ns' }}">{{ '%.1f' | format(s.security) }}</span>{% endif %}</td>
+        <td class="small">{{ cp.label }}</td>
+        <td class="num"><form method="post" action="/jump/cynos/{{ cp.system_id }}/delete" class="inline">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><button class="small subtle">Remove</button></form></td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No cyno points yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+{% if system_names %}<datalist id="systems">{% for n in system_names %}<option value="{{ n }}">{% endfor %}</datalist>{% endif %}
+<script src="/static/tables.js?v={{ ASSET_V }}"></script>
+{% endblock %}
