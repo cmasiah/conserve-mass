@@ -10,3 +10,5 @@
 .attr .muted { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 .queue-meter { margin-top: 5px; max-width: 260px; height: 6px; }
 .can-jump { color: var(--ok); }
+.relink-card { margin-bottom: 12px; border-color: rgba(255, 176, 32, .35); }
+.relink-card ol { margin: 8px 0 6px 18px; padding: 0; line-height: 1.9; }

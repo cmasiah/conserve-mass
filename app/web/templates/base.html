@@ -55,7 +55,10 @@
     <span class="brand">Conserve Mass<small>ops</small></span>
   </a>
 
-  <nav>
+  <div class="nav-wrap">
+  <button type="button" class="nav-more up" data-dir="-1" tabindex="-1" aria-hidden="true" title="More above">
+    <svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button>
+  <nav id="side-nav">
     {{ item('/', 'Home', 'home', p == '/') }}
 
     {% set in_hauling = p == '/hauling' or p.startswith('/contracts') or p.startswith('/customers') or p.startswith('/jump') %}
@@ -84,6 +87,9 @@
       {{ item('/logs', 'Logs', 'logs', p.startswith('/logs')) }}
     {% endcall %}
   </nav>
+  <button type="button" class="nav-more down" data-dir="1" tabindex="-1" aria-hidden="true" title="More below">
+    <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+  </div>
 
   <button type="button" class="nav-fold" id="nav-fold" title="Collapse menu" aria-label="Collapse menu">
     <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS['fold'] | safe }}</svg>
@@ -128,6 +134,25 @@
     st.mini = body.classList.toggle('nav-mini'); save();
   });
   requestAnimationFrame(() => body.classList.add('nav-ready'));  // no animation on first paint
+
+  // When the menu is taller than the window, show which edge has items scrolled out of
+  // view (a fade + arrow), so nothing looks like it's simply missing.
+  const nav = document.getElementById('side-nav'), wrap = nav.parentElement;
+  const edges = () => {
+    const below = nav.scrollHeight - nav.clientHeight - nav.scrollTop;
+    wrap.classList.toggle('more-up', nav.scrollTop > 2);
+    wrap.classList.toggle('more-down', below > 2);
+  };
+  nav.addEventListener('scroll', edges, { passive: true });
+  window.addEventListener('resize', edges);
+  nav.addEventListener('transitionend', edges);    // sections finishing their fold animation
+  document.querySelectorAll('.nav-group, #nav-fold').forEach(b => b.addEventListener('click', () => setTimeout(edges, 260)));
+  wrap.querySelectorAll('.nav-more').forEach(b => b.addEventListener('click', () =>
+    nav.scrollBy({ top: b.dataset.dir * nav.clientHeight * 0.7, behavior: 'smooth' })));
+  // Keep the current page's link in view on load.
+  const act = nav.querySelector('.nav-item.active');
+  if (act && nav.scrollHeight > nav.clientHeight) act.scrollIntoView({ block: 'nearest' });
+  edges();
 })();
 </script>
 {% endif %}
