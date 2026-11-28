@@ -57,7 +57,49 @@ class Call:
 _calls: deque[Call] = deque(maxlen=50_000)
 
 
-def record(path: str, status: int, headers) -> None:
+@dataclass
+class Failure:
+    at: float
+    method: str
+    path: str
+    family: str
+    status: int
+    message: str
+
+
+_failures: deque[Failure] = deque(maxlen=50)
+
+# What each status usually means here, in plain words.
+STATUS_HINTS = {
+    400: "Bad request: the app asked for something ESI didn't accept.",
+    401: "Not signed in: the character's login expired or was revoked. Re-add it on Characters.",
+    403: "Forbidden: the character lacks the in-game role (e.g. Director) or the scope for this.",
+    404: "Not found: the item, structure or character no longer exists or isn't visible.",
+    420: "Error limit hit: too many errors in a minute; the app pauses until it resets.",
+    429: "Rate limited: this character's bucket ran dry; the app waits and retries.",
+    500: "ESI server error on CCP's side; it retries on the next sync.",
+    502: "ESI is unreachable (CCP gateway); usually passes on its own.",
+    503: "ESI is down or in maintenance (often around downtime, 11:00 UTC).",
+    504: "ESI timed out on CCP's side; usually passes on its own.",
+}
+
+
+def _message(body: str) -> str:
+    """ESI errors are JSON like {"error": "..."}; keep just the text, short."""
+    import json
+    text = (body or "").strip()
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            text = str(data.get("error") or data.get("message") or text)
+    except ValueError:
+        pass
+    return " ".join(text.split())[:240]
+
+
+def record(path: str, status: int, headers, method: str = "GET", body: str = "") -> None:
+    if status >= 400:
+        _failures.append(Failure(time.time(), method, path, family(path), status, _message(body)))
     rem = headers.get("X-Ratelimit-Remaining")
     _calls.append(Call(time.time(), family(path), status, headers.get("X-Ratelimit-Group"),
                        int(rem) if rem and rem.isdigit() else None,
@@ -66,6 +108,16 @@ def record(path: str, status: int, headers) -> None:
 
 def reset() -> None:
     _calls.clear()
+    _failures.clear()
+
+
+def recent_failures(limit: int = 20) -> list[dict]:
+    """Newest first: when, what, the status, ESI's own message and what it usually means."""
+    from datetime import datetime, timezone
+    return [{"at": datetime.fromtimestamp(f.at, timezone.utc), "method": f.method, "path": f.path, "family": f.family,
+             "status": f.status, "message": f.message,
+             "hint": STATUS_HINTS.get(f.status, "")}
+            for f in reversed(list(_failures)[-limit:])]
 
 
 def _recent(now: float | None = None) -> list[Call]:
@@ -102,4 +154,5 @@ def summary(now: float | None = None) -> dict:
                          for g, (r, lim) in tight.items()),
                         key=lambda x: x["remaining"])[:5],
         "since_start": len(calls) < _calls.maxlen,
+        "failures": recent_failures(),
     }

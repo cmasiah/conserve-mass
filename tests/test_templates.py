@@ -50,6 +50,8 @@ def test_system_page_rollback_list_and_folded_notifications():
                   digest_threshold=3, discord_max_messages_per_hour=30,
                   max_location_lookups_per_sync=25, update_repo="o/r")
     from app.esi import usage
+    usage.reset()
+    usage.record("/characters/1/skills/", 401, {}, body='{"error": "token is expired"}')
     for watcher, disabled in ((1, True), (2, False)):
         upd = NS(installed=True, watcher_version=watcher, last_seen=now, pending=False,
                  last_result=None, last_finished=None, last_started=None, log_tail="")
@@ -59,6 +61,9 @@ def test_system_page_rollback_list_and_folded_notifications():
         btn = re.search(r'<button class="small"([^>]*)>Roll back to this</button>', html)
         assert btn and (("disabled" in btn.group(1)) == disabled)
         assert 'value="sha-' + "a" * 40 + '"' in html
+    # ESI errors are listed with ESI's own message and what it means.
+    assert "Recent ESI errors" in html and "token is expired" in html and "Re-add it" in html
+    usage.reset()
     # Recent notifications sits in a collapsed fold with no remembered state.
     i = html.index("Recent notifications")
     assert '<section class="fold">' in html[html.rfind("<section", 0, i):i]
