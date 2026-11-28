@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Characters · {{ APP_NAME }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/characters.css?v={{ ASSET_V }}">{% endblock %}
 {% macro info(title, left=False) -%}
   <span class="tip info-tip" tabindex="0"><span class="info-dot" aria-label="What's this?">i</span>
     <span class="tip-body tip-text {{ 'tip-left' if left }}">{% if title %}<span class="tip-head">{{ title }}</span>{% endif %}{{ caller() }}</span></span>
@@ -70,7 +71,19 @@
   </tbody>
 </table>
 
-<h2>Characters</h2>
+<div class="toolbar char-tabs-bar" id="chars">
+  <div class="tabs char-tabs">
+    {% for key, label in tabs %}
+      <a href="/characters{{ '?tab=' ~ key if key != 'list' }}#chars" class="{{ 'active' if tab == key }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+</div>
+{% macro who(ch) -%}
+  <td style="white-space:nowrap"><img src="https://images.evetech.net/characters/{{ ch.character_id }}/portrait?size=32" width="24" height="24" style="border-radius:50%;vertical-align:middle" alt="">
+    {{ ch.name }}{% if ch.is_admin %} <span class="pill ok small">admin</span>{% endif %}</td>
+{%- endmacro %}
+{% set ROMAN = {1: 'I', 2: 'II', 3: 'III', 4: 'IV', 5: 'V'} %}
+{% if tab == 'list' %}
 <table class="chars-table">
   <thead><tr>
     <th>Character</th>
@@ -160,6 +173,126 @@
   {% endfor %}
   </tbody>
 </table>
+{% endif %}
+
+{% if tab == 'implants' %}
+<table class="chars-table char-info">
+  <thead><tr>
+    <th>Character</th>
+    <th>Implants</th>
+    <th>Attributes {% call info("Attributes & remaps") %}
+        <span class="tip-para">Intelligence, Memory, Perception, Willpower, Charisma, including implants.</span>
+        <span class="tip-para"><strong>Remap</strong> · one free neural remap a year, plus any bonus remaps.</span>
+      {% endcall %}</th>
+    <th>Remap</th>
+    <th>Clones {% call info("Clones", left=True) %}
+        <span class="tip-para">Home station, jump clones (hover for where they are and what's in them) and when the next clone jump is allowed.</span>
+      {% endcall %}</th>
+  </tr></thead>
+  <tbody>
+  {% for ch in chars %}{% set r = implants[ch.character_id] %}
+    <tr>
+      {{ who(ch) }}
+      <td class="small">
+        {% if not r.has_implants_scope %}<a class="pill warn" href="/auth/login?profile={{ 'industry' if ch.link_role == 'director' else 'personal' }}" title="Link this character again to grant the implants scope">re-link to see implants</a>
+        {% elif not ch.track_skills %}<span class="muted">Skills tracking is off</span>
+        {% elif r.implants %}<strong>{{ r.implants | length }}</strong><span class="muted">/10</span>
+          <div class="implant-list">{% for i in r.implants %}<span>{{ i }}</span>{% endfor %}</div>
+        {% elif r.synced %}<span class="muted">None plugged in</span>
+        {% else %}<span class="muted">Syncing…</span>{% endif %}
+      </td>
+      <td>
+        {% if r.attributes %}<div class="attr-grid">
+          {% for a, short in [('intelligence', 'Int'), ('memory', 'Mem'), ('perception', 'Per'), ('willpower', 'Wil'), ('charisma', 'Cha')] %}
+            <span class="attr"><span class="muted">{{ short }}</span> {{ r.attributes[a] }}</span>
+          {% endfor %}</div>
+        {% else %}<span class="muted small">—</span>{% endif %}
+      </td>
+      <td class="small">
+        {% if r.attributes %}
+          {% if r.remap_ready %}<span class="pill ok small">Yearly remap ready</span>
+          {% else %}<span title="{{ r.next_remap | dt }}">Yearly in {{ (r.next_remap | delta) | replace('in ', '') }}</span>{% endif %}
+          <div class="muted">{{ r.bonus_remaps }} bonus remap{{ 's' if r.bonus_remaps != 1 }}{% if r.last_remap %} · last {{ r.last_remap.strftime('%Y-%m-%d') }}{% endif %}</div>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td class="small">
+        {% if not r.has_clones_scope %}<span class="muted">re-link to see clones</span>
+        {% elif r.home or r.jump_clones %}
+          {% if r.home %}<div><span class="muted">Home</span> {{ r.home }}</div>{% endif %}
+          {% if r.jump_clones %}
+            <span class="tip" tabindex="0"><span class="pill info small">{{ r.jump_clones | length }} jump clone{{ 's' if r.jump_clones | length != 1 }}</span>
+              <span class="tip-body tip-text tip-left"><span class="tip-head">Jump clones</span>
+                {% for jc in r.jump_clones %}<span class="tip-para"><strong>{{ jc.name or jc.where }}</strong>{% if jc.name %} · {{ jc.where }}{% endif %}
+                  <span class="muted">{{ jc.implants | join(', ') if jc.implants else 'no implants' }}</span></span>{% endfor %}
+              </span></span>
+          {% else %}<span class="muted">No jump clones</span>{% endif %}
+          {% if r.can_jump %}<span class="can-jump"> · can jump</span>{% else %}<span class="muted"> · jump in {{ (r.jump_ready | delta) | replace('in ', '') }}</span>{% endif %}
+        {% else %}<span class="muted">{{ 'Syncing…' if ch.track_skills else 'Skills tracking is off' }}</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if tab == 'skills' %}
+<table class="chars-table char-info">
+  <thead><tr><th>Character</th><th class="num">Total SP</th><th class="num">Unallocated</th>
+    <th class="num">Skills</th><th class="num">At V</th>
+    <th class="num">Alpha-limited {% call info("Alpha-limited") %}
+        <span class="tip-para">Skills trained higher than an Alpha clone can use. Non-zero means this character is (or was synced as) Alpha.</span>
+      {% endcall %}</th>
+    <th>Synced</th></tr></thead>
+  <tbody>
+  {% for ch in chars %}{% set r = skills[ch.character_id] %}
+    <tr>
+      {{ who(ch) }}
+      {% if not ch.track_skills %}<td colspan="6" class="muted small">Skills tracking is off for this character.</td>
+      {% else %}
+      <td class="num"><strong>{{ '{:,}'.format(r.total_sp) if r.total_sp is not none else '—' }}</strong></td>
+      <td class="num {{ 'warn-text' if r.unallocated_sp else 'muted' }}">{{ '{:,}'.format(r.unallocated_sp) }}</td>
+      <td class="num">{{ r.count }}</td>
+      <td class="num">{{ r.at_v }}</td>
+      <td class="num {{ 'warn-text' if r.alpha_limited else 'muted' }}">{{ r.alpha_limited }}</td>
+      <td class="small muted">{{ r.updated | delta if r.updated else 'not yet' }}</td>
+      {% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if tab == 'queues' %}
+<table class="chars-table char-info">
+  <thead><tr><th>Character</th><th>Training now</th><th>Finishes</th><th>Queue</th><th>Queue ends</th></tr></thead>
+  <tbody>
+  {% for ch in chars %}{% set q = queues[ch.character_id] %}
+    <tr>
+      {{ who(ch) }}
+      {% if not ch.track_skills %}<td colspan="4" class="muted small">Skills tracking is off for this character.</td>
+      {% elif q.state == 'empty' %}<td colspan="4"><span class="pill bad small">Queue empty</span></td>
+      {% else %}
+      <td>{{ q.current.name }} {{ ROMAN.get(q.current.level, q.current.level) }}
+        {% if q.pct is not none %}<div class="meter queue-meter"><span style="width:{{ (q.pct * 100) | round(1) }}%"></span></div>{% endif %}</td>
+      <td class="small">{% if q.paused %}<span class="pill warn small">Paused</span>
+        {% else %}{{ q.current.finish | delta }}<div class="muted">{{ q.current.finish | dt }}</div>{% endif %}</td>
+      <td class="small">
+        <span class="tip" tabindex="0"><span class="pill info small">{{ q.entries | length }} skill{{ 's' if q.entries | length != 1 }}</span>
+          <span class="tip-body tip-text tip-left"><span class="tip-head">Queue</span>
+            {% for e in q.entries %}<span class="tip-para">{{ e.name }} {{ ROMAN.get(e.level, e.level) }}{% if e.finish %} <span class="muted">· {{ e.finish | delta }}</span>{% endif %}</span>{% endfor %}
+          </span></span></td>
+      <td class="small">{% if q.paused %}<span class="muted">paused</span>
+        {% elif q.ends %}<span class="{{ 'warn-text' if q.state == 'short' }}">{{ q.ends | delta }}</span><div class="muted">{{ q.ends | dt }}</div>
+        {% else %}<span class="muted">—</span>{% endif %}</td>
+      {% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if tab == 'list' %}
 <p class="small muted">To fix a broken token or add access, link the same character again; its token is
   replaced. Linking as Member removes corp access from its token; a plain sign-in never shrinks it.</p>
+{% endif %}
 {% endblock %}

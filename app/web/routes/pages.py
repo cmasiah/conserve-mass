@@ -183,8 +183,14 @@ def customer_moderate(request: Request, character_id: int, action: str = Form(..
     return _redirect(f"/customers/{character_id}")
 
 
+CHAR_TABS = (("list", "Characters"), ("implants", "Implants"), ("skills", "Skills"),
+             ("queues", "Queues"))
+
+
 @router.get("/characters")
-def characters(request: Request, db: Session = Depends(get_db)):
+def characters(request: Request, tab: str = "list", db: Session = Depends(get_db)):
+    from app.services import charinfo
+    tab = tab if tab in dict(CHAR_TABS) else "list"
     chars = db.scalars(select(Character).order_by(Character.is_admin.desc(),
                                                   Character.name)).all()
     corp = corps_svc.home_corp(db)
@@ -203,7 +209,11 @@ def characters(request: Request, db: Session = Depends(get_db)):
                   toggles=char_svc.TOGGLES, missing={c.character_id: char_svc.missing_scopes(c)
                                                      for c in chars},
                   courier_scopes=set(COURIER_SCOPES), personal_scopes=set(PERSONAL_SCOPES),
-                  corp_scopes=set(CORP_INDUSTRY_SCOPES))
+                  corp_scopes=set(CORP_INDUSTRY_SCOPES), tab=tab, tabs=CHAR_TABS,
+                  implants=charinfo.implant_rows(db, chars) if tab == "implants" else {},
+                  skills=charinfo.skill_rows(db, chars) if tab == "skills" else {},
+                  queues=charinfo.queue_rows(db, chars) if tab == "queues" else {},
+                  now=utcnow())
 
 
 @router.post("/characters/{character_id}/track")

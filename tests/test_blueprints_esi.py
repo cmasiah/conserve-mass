@@ -93,7 +93,10 @@ def test_thirty_characters_cost_one_call_each_and_nothing_while_cached(db, fake)
     f = fake({("GET", "/characters/*/skills"): {"skills": []},
               ("GET", "/characters/*/skillqueue"): [],
               ("GET", "/characters/*/industry/jobs"): [],
-              ("GET", "/characters/*/blueprints"): []})
+              ("GET", "/characters/*/blueprints"): [],
+              ("GET", "/characters/*/attributes"): {"intelligence": 20},
+              ("GET", "/characters/*/implants"): [],
+              ("GET", "/characters/*/clones"): {"jump_clones": []}})
 
     async def one_round():
         await sync_skills()
@@ -101,13 +104,15 @@ def test_thirty_characters_cost_one_call_each_and_nothing_while_cached(db, fake)
         await sync_blueprints()
     asyncio.run(one_round())
     # Exactly one request per character per endpoint: no fan-out, no retries.
-    for route in ("skills", "skillqueue", "industry/jobs", "blueprints"):
+    for route in ("skills", "skillqueue", "industry/jobs", "blueprints", "attributes"):
         assert f.count(f"/characters/*/{route}") == 30, route
-    assert len(f.calls) == 120 and f.locked == []
+    n = len(f.calls)    # + implants/clones when the test scopes include them
+    assert n == 30 * (5 + sum(s in ALL_SCOPES for s in ("read_implants", "read_clones")))
+    assert f.locked == []
 
     # Run everything again straight away: ESI's cache hasn't expired, so no calls at all.
     asyncio.run(one_round())
-    assert len(f.calls) == 120
+    assert len(f.calls) == n
 
 
 def test_expected_calls_per_hour_for_thirty_characters(db):
@@ -120,10 +125,12 @@ def test_expected_calls_per_hour_for_thirty_characters(db):
     assert rows["Skills + queue"].per_hour_each == 2
     assert rows["Blueprints"].per_hour_each == 1
     assert rows["Corp contracts"].per_hour == 12      # polled every minute, cached 5
-    # Per character: 12 jobs + 2 skills + 1 blueprints = 15/hour, i.e. 1 call every 4
-    # minutes, against a per-character bucket of hundreds of tokens per 15 minutes.
+    assert rows["Attributes, implants, clones"].per_hour_each == 3
+    # Per character: 12 jobs + 2 skills + 3 attributes/implants/clones + 1 blueprints =
+    # 18/hour, about 1 call every 3 minutes, against a per-character bucket of hundreds of
+    # tokens per 15 minutes.
     per_char = sum(r.per_hour_each for f, r in rows.items() if r.who == "per character")
-    assert per_char == 15
+    assert per_char == 18
 
 
 def test_corp_403_falls_back_to_another_director_and_parks_the_first(db, fake):

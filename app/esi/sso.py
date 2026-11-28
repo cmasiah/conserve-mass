@@ -38,6 +38,12 @@ PERSONAL_SCOPES = [
     "esi-assets.read_assets.v1",
     "esi-universe.read_structures.v1",      # names of structures its jobs/assets sit in
 ]
+# Implants, jump clones (Characters › Implants). Requested on new links but not required:
+# characters linked before keep working and just don't show implants until re-linked.
+CLONE_SCOPES = [
+    "esi-clones.read_implants.v1",
+    "esi-clones.read_clones.v1",
+]
 CORP_INDUSTRY_SCOPES = [
     "esi-industry.read_corporation_jobs.v1",
     "esi-assets.read_corporation_assets.v1",
@@ -47,8 +53,8 @@ CORP_INDUSTRY_SCOPES = [
 INDUSTRY_SCOPES = [s for s in PERSONAL_SCOPES if s not in COURIER_SCOPES] + CORP_INDUSTRY_SCOPES
 SCOPE_PROFILES = {
     "courier": COURIER_SCOPES,
-    "personal": PERSONAL_SCOPES,
-    "industry": COURIER_SCOPES + INDUSTRY_SCOPES,
+    "personal": PERSONAL_SCOPES + CLONE_SCOPES,
+    "industry": COURIER_SCOPES + INDUSTRY_SCOPES + CLONE_SCOPES,
     "login": [],
 }
 PROFILE_LABELS = {"personal": "Member", "industry": "Director+", "courier": "Contracts only"}
