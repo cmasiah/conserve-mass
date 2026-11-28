@@ -275,7 +275,8 @@ async def _prefetch(db: Session, corp_id: int, rows: list[dict], token: str) -> 
         if r["issuer_id"] in quiet:
             continue
         for loc_id in (r.get("start_location_id"), r.get("end_location_id")):
-            await resolver.resolve_location(db, loc_id, token, budget)
+            await resolver.resolve_location(db, loc_id, token, budget,
+                                            source=f"contract {r.get('contract_id')}")
     db.commit()
     return names
 
