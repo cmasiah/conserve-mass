@@ -19,7 +19,7 @@ class Kind:
     label: str
     help: str
     group: str
-    default: bool = True
+    default: bool = True   # only for kinds that existed before; new kinds start off
 
 
 KINDS: list[Kind] = [
@@ -34,8 +34,12 @@ KINDS: list[Kind] = [
     Kind("status_cancelled", "Contract cancelled by issuer", "", "Hauling"),
     Kind("status_deleted", "Contract deleted by issuer", "", "Hauling"),
     Kind("status_rejected", "Contract rejected", "", "Hauling"),
-    Kind("industry_job_ready", "Watched industry job ready",
-         "A manufacturing job matching the rules below is ready for delivery.", "Industry"),
+    Kind("industry_job_ready", "Watched ship or item built",
+         "A manufacturing job matching the groups or keywords below is ready for delivery.",
+         "Industry"),
+    Kind("research_job_ready", "Research job finished",
+         "ME or TE research, copying or invention finished and is ready to deliver.",
+         "Industry", default=False),
     Kind("spam_detected", "Possible contract spam",
          "An issuer was auto-muted for posting too many contracts.", "Safety & system"),
     Kind("token_invalid", "ESI login expired",
@@ -48,15 +52,29 @@ KIND_BY_KEY = {k.key: k for k in KINDS}
 ALWAYS_ON = {"test"}  # the System page's test DM
 
 # Industry watch rules: matched against the built item's ESI group name.
-# Only manufacturing jobs are considered, so reactions, research, copying and
-# invention never alert.
-INDUSTRY_RULES: dict[str, tuple[str, frozenset[str], bool]] = {
-    "freighters": ("Freighters & jump freighters",
-                   frozenset({"Freighter", "Jump Freighter"}), True),
-    "capitals": ("Capital ships (carriers, dreads, FAX, capital industrials)",
-                 frozenset({"Carrier", "Dreadnought", "Lancer Dreadnought", "Force Auxiliary",
-                            "Capital Industrial Ship"}), True),
-    "supercaps": ("Supercarriers & titans", frozenset({"Supercarrier", "Titan"}), True),
+# Only manufacturing jobs are considered (research has its own alert above).
+CAPITAL_GROUPS = frozenset({"Carrier", "Dreadnought", "Lancer Dreadnought", "Force Auxiliary",
+                            "Capital Industrial Ship", "Supercarrier", "Titan", "Freighter",
+                            "Jump Freighter"})
+
+
+@dataclass(frozen=True)
+class Rule:
+    label: str
+    groups: frozenset[str]
+    legacy: str          # older setting this inherits from until the page is saved
+
+
+INDUSTRY_RULES: dict[str, Rule] = {
+    "freighters": Rule("Freighters", frozenset({"Freighter"}), "freighters"),
+    "jump_freighters": Rule("Jump Freighters", frozenset({"Jump Freighter"}), "freighters"),
+    "rorquals": Rule("Rorquals", frozenset({"Capital Industrial Ship"}), "capitals"),
+    "capitals": Rule("All capital ships", CAPITAL_GROUPS, "capitals"),
+    "supers": Rule("Supercarriers", frozenset({"Supercarrier"}), "supercaps"),
+    "titans": Rule("Titans", frozenset({"Titan"}), "supercaps"),
+}
+RULE_HELP = {
+    "capitals": "Carriers, dreadnoughts, FAX, Rorquals, freighters, JFs, supers and titans",
 }
 
 _cache: dict[str, str] | None = None
@@ -87,9 +105,18 @@ def is_enabled(db: Session, kind: str) -> bool:
     return _flag(db, kind, k.default if k else True)
 
 
+def _rule_on(db: Session, key: str) -> bool:
+    """A rule's saved value; before the page is saved with it, whatever the older,
+    coarser setting said (those defaulted on), so upgrading changes nothing."""
+    saved = _load(db).get(f"{PREFIX}industry:{key}")
+    if saved is not None:
+        return saved == "1"
+    legacy = _load(db).get(f"{PREFIX}industry:{INDUSTRY_RULES[key].legacy}")
+    return True if legacy is None else legacy == "1"
+
+
 def industry_rules(db: Session) -> tuple[set[str], list[str]]:
-    rules = {key for key, (_l, _g, default) in INDUSTRY_RULES.items()
-             if _flag(db, f"industry:{key}", default)}
+    rules = {key for key in INDUSTRY_RULES if _rule_on(db, key)}
     raw = _load(db).get(PREFIX + "industry:keywords", "")
     keywords = [w.strip().lower() for w in raw.replace("\n", ",").split(",") if w.strip()]
     return rules, keywords
@@ -100,10 +127,11 @@ def job_rule_match(activity_id: int, product_name: str | None, group_name: str |
     """Return the label of the first matching watch rule, or None."""
     if activity_id != 1:  # manufacturing only
         return None
-    for key in rules:
-        label, groups, _ = INDUSTRY_RULES[key]
-        if group_name in groups:
-            return label
+    # Most specific rule first, so a titan says "Titans", not "All capital ships".
+    for key in sorted(rules, key=lambda k: len(INDUSTRY_RULES[k].groups)):
+        rule = INDUSTRY_RULES[key]
+        if group_name in rule.groups:
+            return rule.label
     name = (product_name or "").lower()
     for kw in keywords:
         if kw in name:
@@ -135,6 +163,6 @@ def snapshot(db: Session) -> dict:
     for k in KINDS:
         groups.setdefault(k.group, []).append((k, is_enabled(db, k.key)))
     return {"groups": groups,
-            "rules": [(key, label, sorted(g), key in rules)
-                      for key, (label, g, _d) in INDUSTRY_RULES.items()],
-            "keywords": ", ".join(keywords)}
+            "rules": [(key, r.label, RULE_HELP.get(key) or ", ".join(sorted(r.groups)),
+                       key in rules) for key, r in INDUSTRY_RULES.items()],
+            "keywords": keywords}

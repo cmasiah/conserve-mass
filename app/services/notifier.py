@@ -41,6 +41,7 @@ DIGEST_TITLES = {
     "status_deleted": "🗑️ {n} contracts deleted",
     "status_rejected": "↩️ {n} contracts rejected",
     "industry_job_ready": "🏭 {n} watched industry jobs ready for delivery",
+    "research_job_ready": "🔬 {n} research jobs finished",
 }
 
 _sent_times: deque[float] = deque()  # monotonic timestamps of messages sent (last hour)

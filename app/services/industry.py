@@ -425,9 +425,23 @@ async def sync_jobs() -> None:
         db.commit()
 
 
+RESEARCH_ACTIVITIES = (3, 4, 5, 8)   # TE, ME, copying, invention
+
+
+def _owner_text(j: IndustryJob, corps: dict) -> str:
+    if j.owner_type != "corporation":
+        return "personal job"
+    c = corps.get(j.owner_id)
+    return f"[{c.ticker}] corp job" if c and c.ticker else "corp job"
+
+
 def queue_job_alerts(db: Session) -> int:
-    """DM once per finished manufacturing job whose product matches your watch rules.
-    DB-only (no ESI), so it's also run every minute to catch jobs finishing between syncs."""
+    """DMs for finished jobs: watched manufacturing (groups/keywords) and, if switched on,
+    research. Once per job. DB-only (no ESI), so it also runs every minute."""
+    return _manufacturing_alerts(db) + _research_alerts(db)
+
+
+def _manufacturing_alerts(db: Session) -> int:
     if not prefs.is_enabled(db, "industry_job_ready"):
         return 0
     rules, keywords = prefs.industry_rules(db)
@@ -450,15 +464,41 @@ def queue_job_alerts(db: Session) -> int:
         if not rule:
             continue
         who = names.get(j.installer_id, str(j.installer_id))
-        owner = (f"[{corps[j.owner_id].ticker}] corp job" if j.owner_type == "corporation"
-                 and j.owner_id in corps and corps[j.owner_id].ticker else
-                 "corp job" if j.owner_type == "corporation" else "personal job")
         if enqueue(db, ref=f"job:{j.job_id}", kind="industry_job_ready",
                    title=f"🏭 {ti.name} ready for delivery",
                    body=(f"**{j.runs}× {ti.name}** ({ti.group_name or 'item'}) finished.\n"
-                         f"**Installer:** {who} · {owner}\n"
+                         f"**Installer:** {who} · {_owner_text(j, corps)}\n"
                          f"**Watched because:** {rule}"),
                    url=f"{base}/industry/jobs", line=f"{j.runs}× {ti.name} · {who}"):
+            queued += 1
+    return queued
+
+
+def _research_alerts(db: Session) -> int:
+    if not prefs.is_enabled(db, "research_job_ready"):
+        return 0
+    now = utcnow()
+    done = db.scalars(select(IndustryJob).where(
+        IndustryJob.activity_id.in_(RESEARCH_ACTIVITIES),
+        (IndustryJob.status == "ready") | (IndustryJob.end_date <= now))).all()
+    if not done:
+        return 0
+    ids = {j.installer_id for j in done} | {j.blueprint_type_id for j in done} \
+        | {j.product_type_id for j in done if j.product_type_id}
+    names = {e.entity_id: e.name for e in db.scalars(select(EntityName).where(
+        EntityName.entity_id.in_(ids)))}
+    corps = {c.corporation_id: c for c in db.scalars(select(Corporation))}
+    base = get_settings().base_url
+    queued = 0
+    for j in done:
+        what = names.get(j.product_type_id or j.blueprint_type_id, "a blueprint")
+        activity = ACTIVITY_NAMES.get(j.activity_id, "Research")
+        who = names.get(j.installer_id, str(j.installer_id))
+        if enqueue(db, ref=f"job:{j.job_id}", kind="research_job_ready",
+                   title=f"🔬 {activity} finished: {what}",
+                   body=(f"**{activity}** of **{what}** ({j.runs} run{'s' if j.runs != 1 else ''})"
+                         f" is ready to deliver.\n**Installer:** {who} · {_owner_text(j, corps)}"),
+                   url=f"{base}/industry/jobs", line=f"{activity}: {what} · {who}"):
             queued += 1
     return queued
 
