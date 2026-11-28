@@ -17,9 +17,10 @@ def test_system_page_shows_running_updater():
     ver = NS(current="0.5.0", current_label="0.5.0", channel="beta", update_available=False,
              building=False, latest="0.5.0", checked_at=now, error=None,
              builds=[{"tag": "sha-" + "a" * 40, "label": "aaaaaaa", "message": "Old build",
-                      "date": now - timedelta(days=1), "url": "https://x", "current": False},
+                      "date": now - timedelta(days=1), "url": "https://x", "current": False,
+                      "kind": "rollback"},
                      {"tag": "sha-" + "b" * 40, "label": "bbbbbbb", "message": "Newest",
-                      "date": now, "url": "https://x", "current": True}])
+                      "date": now, "url": "https://x", "current": True, "kind": "current"}])
     upd = NS(installed=True, watcher_version=2, last_seen=now - timedelta(seconds=20), pending=False,
              last_result=None, last_finished=None, last_started=None, log_tail="")
     settings = NS(base_url="http://x", sso_callback_url="http://x/cb", config_dir="/config",
@@ -42,7 +43,8 @@ def test_system_page_rollback_list_and_folded_notifications():
     ver = NS(current="0.5.0", current_label="0.5.0", channel="beta", update_available=False,
              building=False, latest="0.5.0", checked_at=now, error=None,
              builds=[{"tag": "sha-" + "a" * 40, "label": "aaaaaaa", "message": "Old build",
-                      "date": now, "url": "https://x", "current": False}])
+                      "date": now, "url": "https://x", "current": False,
+                      "kind": "rollback"}])
     settings = NS(base_url="http://x", sso_callback_url="http://x/cb", config_dir="/config",
                   contract_poll_seconds=60, esi_contact="a@b.c", spam_contracts_per_hour=10,
                   digest_threshold=3, discord_max_messages_per_hour=30,

@@ -107,7 +107,8 @@ async def image_published(client: httpx.AsyncClient, repo: str, tag: str) -> boo
     return r.status_code == 200
 
 
-MAX_BUILDS = 8
+MAX_BUILDS = 12          # builds looked at; the page shows at most 1 newer + 3 older
+MAX_OLDER = 3
 _TAG_RE = re.compile(r"^(sha-[0-9a-f]{40}|\d+\.\d+\.\d+)$")
 
 
@@ -126,10 +127,25 @@ async def _ghcr_tags(client: httpx.AsyncClient, repo: str) -> list[str]:
     return r.json().get("tags", []) if r.status_code == 200 else []
 
 
+def trim_builds(builds: list[dict]) -> list[dict]:
+    """Newest first in, at most: the newest build above the running one (an upgrade),
+    the running one, and up to MAX_OLDER below it (rollbacks). Each gets a "kind"."""
+    idx = next((i for i, b in enumerate(builds) if b["current"]), None)
+    if idx is None:   # running build not in the list (too old, or a local build)
+        return [{**b, "kind": "upgrade" if i == 0 else "rollback"}
+                for i, b in enumerate(builds[:1 + MAX_OLDER])]
+    out = []
+    if idx > 0:
+        out.append({**builds[0], "kind": "upgrade"})
+    out.append({**builds[idx], "kind": "current"})
+    out += [{**b, "kind": "rollback"} for b in builds[idx + 1: idx + 1 + MAX_OLDER]]
+    return out
+
+
 async def recent_builds(client: httpx.AsyncClient, repo: str, commits: list[dict]) -> list[dict]:
-    """Images you can roll back to.
-    beta: the last few beta commits whose sha-<commit> image exists.
-    stable: the newest released version tags."""
+    """Images you can switch to (see trim_builds).
+    beta: recent beta commits whose sha-<commit> image exists.
+    stable: released version tags."""
     tags = set(await _ghcr_tags(client, repo))
     if CHANNEL == "beta":
         out = []
@@ -139,11 +155,11 @@ async def recent_builds(client: httpx.AsyncClient, repo: str, commits: list[dict
                 out.append({"tag": tag, "label": f"{c['sha']}", "message": c["message"],
                             "date": c["date"], "url": c["url"],
                             "current": c.get("full_sha") == GIT_SHA})
-        return out[:MAX_BUILDS]
+        return trim_builds(out[:MAX_BUILDS])
     versions = sorted((t for t in tags if re.match(r"^\d+\.\d+\.\d+$", t)),
                       key=parse_version, reverse=True)[:MAX_BUILDS]
-    return [{"tag": v, "label": v, "message": "", "date": None, "url": None,
-             "current": v == APP_VERSION} for v in versions]
+    return trim_builds([{"tag": v, "label": v, "message": "", "date": None, "url": None,
+                         "current": v == APP_VERSION} for v in versions])
 
 
 async def check(force: bool = False) -> VersionInfo:
