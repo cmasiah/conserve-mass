@@ -9,7 +9,7 @@
 <div class="toolbar">
   <h1 style="margin:0">Jump Planner</h1>
   <div class="tabs">
-    {% for key, label in [('route', 'Route'), ('lanes', 'Courier lanes'), ('pilots', 'Pilots & ships'), ('cynos', 'Cyno points')] %}
+    {% for key, label in [('route', 'Route'), ('lanes', 'Courier lanes'), ('haul', 'Bulk haul'), ('pilots', 'Pilots & ships'), ('cynos', 'Cyno points')] %}
       <a href="?tab={{ key }}{{ '&pilot=' ~ chosen.character_id if chosen }}" class="{{ 'active' if tab == key }}">{{ label }}</a>
     {% endfor %}
   </div>
@@ -41,11 +41,14 @@
       {% else %}<option value="">No JF pilots set up yet</option>{% endfor %}
     </select></label>
   {% if tab == 'route' %}
-    <label>From <input name="frm" value="{{ frm }}" list="systems" placeholder="e.g. Jita" required></label>
-    <label>To <input name="to" value="{{ to }}" list="systems" placeholder="e.g. AC2E-3" required></label>
+    <label>From <span class="ac"><input name="frm" value="{{ frm }}" data-ac placeholder="e.g. Jita" autocomplete="off" required></span></label>
+    <label>To <span class="ac"><input name="to" value="{{ to }}" data-ac placeholder="e.g. AC2E-3" autocomplete="off" required></span></label>
   {% endif %}
   <label class="check"><input type="checkbox" name="cynos" value="1" {{ 'checked' if cynos }}> Only via my cyno points</label>
-  <button class="primary">{{ 'Plan route' if tab == 'route' else 'Update' }}</button>
+  <button class="primary" data-busy="{{ 'Planning…' if tab == 'route' else 'Updating…' }}"
+          {{ 'disabled' if not status.systems or not ready }}>{{ 'Plan route' if tab == 'route' else 'Update' }}</button>
+  {% if not status.systems %}<span class="small warn-text">Needs the star map: download it above first.</span>
+  {% elif not ready %}<span class="small warn-text">Needs a JF pilot: <a href="?tab=pilots">Pilots &amp; ships</a>.</span>{% endif %}
   {% if chosen %}
     <span class="pilot-stats small">
       <span><strong>{{ '%.2f' | format(chosen.range_ly) }}</strong> LY range</span>
@@ -132,6 +135,91 @@
   {% endfor %}
 {% endif %}
 
+{% if tab == 'haul' %}
+{%- set hf = haul_form -%}
+<form method="post" action="/jump/haul" class="haul-form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="haul-grid">
+    <div class="card">
+      <div class="sub">1 · What to haul</div>
+      <textarea name="items" rows="12" placeholder="Paste from an EVE inventory window (select all, Ctrl+C), or lines like:&#10;Tritanium 25,000,000&#10;Capital Armor Plates x40">{{ hf.get('items', '') }}</textarea>
+      <div class="small muted">Inventory pastes carry their own volume. Plain lines are looked up (packaged volume).</div>
+    </div>
+    <div class="card">
+      <div class="sub">2 · Where</div>
+      <div class="haul-where">
+        <label>From <span class="ac"><input name="frm" value="{{ frm }}" data-ac placeholder="pickup system" autocomplete="off"></span></label>
+        <label>To <span class="ac"><input name="to" value="{{ to }}" data-ac placeholder="drop system" autocomplete="off"></span></label>
+        <label>Reward <input name="reward" value="{{ hf.get('reward', '') }}" placeholder="e.g. 1.2b (optional)"></label>
+        <label class="check"><input type="checkbox" name="round_trip" value="1" {{ 'checked' if hf.get('round_trip') }}> Count the empty trip back</label>
+      </div>
+      <div class="sub">3 · Which JFs, and how they're fitted</div>
+      <table class="compact haul-jfs">
+        <tr class="small muted"><td></td><td>Loaded: ORE<br>expanders</td><td>Back: economizers<br>(carried in the hold)</td><td>Hold when loaded</td></tr>
+        {% for p in ready %}{% set h = hf.get('fits', {}).get(p.character_id) %}
+        <tr>
+          <td><label class="check"><input type="checkbox" name="pilot" value="{{ p.character_id }}" {{ 'checked' if p.character_id in hf.get('pilots', []) }}>
+            {{ p.name }}</label><div class="small muted">{{ p.ship_name }}</div></td>
+          <td><input type="number" name="ore_{{ p.character_id }}" min="0" max="3" value="{{ h.loaded_ore if h else 3 }}"></td>
+          <td><input type="number" name="econ_{{ p.character_id }}" min="0" max="3" value="{{ h.return_econ if h else 3 }}"></td>
+          <td class="small">{% if h %}{{ '{:,.0f}'.format(h.capacity) }} m³{% if h.carried_econ %}<div class="muted">after {{ h.carried_econ }} economizer{{ 's' if h.carried_econ != 1 }} in the hold</div>{% endif %}{% else %}<span class="muted">worked out on Plan</span>{% endif %}
+            <input name="cap_{{ p.character_id }}" class="cap-ov" value="{{ '{:,.0f}'.format(h.capacity_override) if h and h.capacity_override else '' }}" placeholder="override m³"></td>
+        </tr>
+        {% else %}<tr><td colspan="4" class="muted">No JF pilots ready. Set them up on <a href="?tab=pilots">Pilots &amp; ships</a>.</td></tr>{% endfor %}
+      </table>
+      <button class="primary" data-busy="Packing…">Plan the haul</button>
+    </div>
+  </div>
+</form>
+
+{% if haul %}
+  {% if haul_bad %}<div class="flash error">Couldn't read {{ haul_bad | length }} line{{ 's' if haul_bad | length != 1 }}: {{ haul_bad[:3] | join(' · ') }}</div>{% endif %}
+  {% if haul_unknown %}<div class="flash error">Unknown item{{ 's' if haul_unknown | length != 1 }} (no volume): {{ haul_unknown[:5] | join(', ') }}</div>{% endif %}
+  {% if haul.too_big %}<div class="flash error">Too big for any of these JFs: {{ haul.too_big | map(attribute='name') | join(', ') }}</div>{% endif %}
+  {% set fuel = haul.fuel_by_type() %}
+  <div class="route-sum">
+    <div class="kpi"><span class="kpi-v">{{ '{:,.0f}'.format(haul.total_m3) }}</span><span class="kpi-l">m³ to haul</span>
+      <span class="kpi-s">{{ haul_items | length }} item types</span></div>
+    <div class="kpi"><span class="kpi-v">{{ haul.loads | length }}</span><span class="kpi-l">loaded trip{{ 's' if haul.loads | length != 1 }}</span>
+      <span class="kpi-s">{{ haul.waves }} wave{{ 's' if haul.waves != 1 }} with {{ haulers | length }} JF{{ 's' if haulers | length != 1 }} flying together</span></div>
+    <div class="kpi"><span class="kpi-v">{{ haul.total_jumps or '–' }}</span><span class="kpi-l">jumps in total</span>
+      <span class="kpi-s">{% if haul.routes %}{{ 'there and back' if haul.round_trip else 'one way' }}{% else %}add From/To to count{% endif %}</span></div>
+    <div class="kpi"><span class="kpi-v">{{ '{:,}'.format(fuel.values() | sum) if fuel else '–' }}</span>
+      <span class="kpi-l">isotopes</span>
+      {% set isk = namespace(v=0) %}{% for t, n in fuel.items() %}{% set isk.v = isk.v + n * prices.get(t, 0) %}{% endfor %}
+      <span class="kpi-s">{% for t, n in fuel.items() %}{{ '{:,}'.format(n) }} {{ isotopes.get(t, 'isotopes') | replace(' Isotopes', '') }}{{ ' · ' if not loop.last }}{% endfor %}
+        {% if isk.v %}<br>{{ isk.v | isk }} at average price{% endif %}{% if reward and isk.v %} · {{ (reward - isk.v) | isk }} after fuel{% endif %}</span></div>
+    {% if reward and haul.total_jumps %}<div class="kpi"><span class="kpi-v">{{ (reward / haul.total_jumps) | isk }}</span><span class="kpi-l">reward per jump</span></div>{% endif %}
+  </div>
+
+  {% for ld in haul.loads %}
+    {% set r = haul.routes.get(ld.hauler.profile.character_id) %}
+    <section class="card load">
+      <div class="load-head">
+        <span class="pill small">Wave {{ ld.wave }}</span>
+        <strong>{{ ld.hauler.profile.name }}</strong> <span class="muted small">{{ ld.hauler.profile.ship_name }} · {{ ld.hauler.loaded_ore }} ORE{{ ' + ' ~ ld.hauler.loaded_econ ~ ' econ' if ld.hauler.loaded_econ }} out, {{ ld.hauler.return_econ }} econ back</span>
+        <span class="spacer"></span>
+        <span class="small">{{ '{:,.0f}'.format(ld.m3) }} / {{ '{:,.0f}'.format(ld.hauler.capacity) }} m³</span>
+        <span class="meter load-fill"><span style="width: {{ (ld.m3 / ld.hauler.capacity * 100) | round(0) }}%"></span></span>
+        {% if r and not r.error %}<span class="small muted">{{ haul.jumps_for(ld) }} jumps · {{ '{:,}'.format(haul.fuel_for(ld)) }} {{ ld.hauler.profile.fuel_name }}</span>{% endif %}
+        {% from "partials/clip.html" import copy_button %}{{ copy_button(ld.clip(), "Copy", "small") }}
+      </div>
+      <table class="compact load-items">
+        {% for name, qty, m3 in ld.items %}
+          <tr><td>{{ name }}</td><td class="num">{{ '{:,}'.format(qty) }}</td><td class="num muted">{{ '{:,.0f}'.format(m3) }} m³</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+  {% endfor %}
+  {% if haul.routes %}{% set any = haul.routes.values() | list %}{% if any and any[0].error %}<div class="flash error">{{ any[0].error }}</div>{% endif %}{% endif %}
+  <p class="small muted">Plan: every JF flies in each wave until what's left fits fewer ships; the last wave uses the fewest
+    (then cheapest) JFs. Stacks stay whole where they fit and are split only when needed. The loaded leg flies with ORE
+    expanders (and any spare slots as economizers); the empty leg back refits economizers, which ride in the hold
+    on the way out, so their volume is kept free.</p>
+{% endif %}
+{% from "partials/clip.html" import clip_script %}{{ clip_script() }}
+{% endif %}
+
 {% if tab == 'pilots' %}
   <div class="toolbar">
     <form method="post" action="/jump/pilots/add" class="inline">
@@ -159,11 +247,15 @@
           <option value="">Detect from assets</option>
           {% for name, tid in jf_types.items() %}<option value="{{ tid }}" {{ 'selected' if jp.ship_type_id == tid }}>{{ name }}</option>{% endfor %}
         </select>
-        <div class="sub">Low slots</div>
-        <select name="fit">
-          <option value="auto" {{ 'selected' if p.fit_source != 'manual' }}>From its fit{{ ' (' ~ p.economizers ~ ' econ, ' ~ p.expanders ~ ' cargo)' if p.fit_source == 'assets' }}</option>
-          {% for e in range(4) %}<option value="{{ e }}:{{ 3 - e }}" {{ 'selected' if p.fit_source == 'manual' and p.economizers == e }}>{{ e }} economizer{{ 's' if e != 1 }} + {{ 3 - e }} cargo expander{{ 's' if 3 - e != 1 }}</option>{% endfor %}
-        </select>
+        <div class="sub">Low slots (3)</div>
+        <label class="check small"><input type="radio" name="fit_mode" value="auto" {{ 'checked' if p.fit_source != 'manual' }}>
+          From its fit{% if p.fit_source == 'assets' %}: {{ p.economizers }} economizer{{ 's' if p.economizers != 1 }}, {{ p.ore }} ORE, {{ p.t2 }} Expanded Cargohold II{% elif p.fit_source == 'none' %} (no ship found){% endif %}</label>
+        <label class="check small"><input type="radio" name="fit_mode" value="manual" {{ 'checked' if p.fit_source == 'manual' }}> Set it:</label>
+        <div class="fit-counts small">
+          <label><input type="number" name="econ" min="0" max="3" value="{{ p.economizers }}"> Economizers</label>
+          <label><input type="number" name="ore" min="0" max="3" value="{{ p.ore }}"> ORE Expanded Cargohold</label>
+          <label><input type="number" name="t2" min="0" max="3" value="{{ p.t2 }}"> Expanded Cargohold II</label>
+        </div>
       </div>
       <div>
         <div class="sub">Skills</div>
@@ -202,8 +294,10 @@
         <p class="small muted">Defaults are the usual values. If the planner's numbers don't match a pilot's fitting
           window, either correct these percentages or type the real numbers into that pilot's Result fields.</p>
         {% for k, label in bonus_labels.items() %}
+          {% set pct = bonus_units[k] == '%' %}
           <label class="result-line small"><span>{{ label }}</span>
-            <input name="{{ k }}" value="{{ '%g' | format(bonus[k] * 100) }}"><span class="muted">%</span></label>
+            <input name="{{ k }}" value="{{ '%g' | format(bonus[k] * 100) if pct else '{:,.0f}'.format(bonus[k]) }}">
+            <span class="muted">{{ bonus_units[k] }}{% if module_source.get(k) %} · <span class="ok-text">from game data</span>{% endif %}</span></label>
         {% endfor %}
         <button class="primary">Save bonus values</button>
       </form>
@@ -214,7 +308,7 @@
 {% if tab == 'cynos' %}
   <form method="post" action="/jump/cynos/add" class="card plan-form">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>System <input name="system" list="systems" placeholder="low/null-sec system" required></label>
+    <label>System <span class="ac"><input name="system" data-ac placeholder="low/null-sec system" autocomplete="off" required></span></label>
     <label>Note <input name="label" placeholder="e.g. cyno alt, Pharolux beacon"></label>
     <button class="primary">Add cyno point</button>
   </form>
@@ -234,6 +328,6 @@
   </table>
 {% endif %}
 
-{% if system_names %}<datalist id="systems">{% for n in system_names %}<option value="{{ n }}">{% endfor %}</datalist>{% endif %}
 <script src="/static/tables.js?v={{ ASSET_V }}"></script>
+<script src="/static/jump.js?v={{ ASSET_V }}"></script>
 {% endblock %}
