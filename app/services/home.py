@@ -102,9 +102,15 @@ def attention(db: Session, now: datetime, *, bot_configured: bool, bot_ready: bo
     for t in db.scalars(select(EsiToken).where(EsiToken.is_valid.is_(False))):
         name = t.character.name if t.character else t.character_id
         items.append(Attention("bad", f"ESI login for {name} needs re-linking", "/characters"))
-    for s in db.scalars(select(SyncState).where(SyncState.last_error.is_not(None))
-                        .order_by(SyncState.last_attempt_at.desc()).limit(5)):
-        items.append(Attention("warn", f"Sync error on {s.key}: {s.last_error[:120]}", "/logs"))
+    # One line for all failing syncs (role-parked "denied:" markers are expected, not errors).
+    failing = db.scalars(select(SyncState).where(
+        SyncState.last_error.is_not(None), ~SyncState.key.startswith("denied:"))
+        .order_by(SyncState.last_attempt_at.desc())).all()
+    if failing:
+        newest = failing[0]
+        more = f" (+{len(failing) - 1} more)" if len(failing) > 1 else ""
+        items.append(Attention("warn", f"Sync error: {newest.key}: {newest.last_error[:90]}{more}",
+                               "/system"))
     if not bot_configured:
         items.append(Attention("warn", "Discord isn't configured; alerts are queuing", "/system"))
     elif not bot_ready:
@@ -236,10 +242,36 @@ def skill_queues(db: Session, now: datetime) -> list[dict]:
     return out
 
 
+@dataclass
+class StockSummary:
+    stacks: int = 0
+    watched_places: int = 0
+    targets: int = 0
+    short: list = field(default_factory=list)     # (name, amount to buy), biggest first
+    excess: int = 0
+
+
+def stock_summary(db: Session) -> StockSummary:
+    from app.models import Asset, AssetWatch, MaterialTarget
+    from app.services.assets import material_lines
+    out = StockSummary(
+        stacks=db.scalar(select(func.count()).select_from(Asset)) or 0,
+        watched_places=db.scalar(select(func.count()).select_from(AssetWatch)) or 0,
+        targets=db.scalar(select(func.count()).select_from(MaterialTarget)) or 0)
+    if out.targets:
+        _sections, every = material_lines(db, "watched")
+        out.short = sorted(((ln.name, ln.short, ln.min_qty) for ln in every if ln.short),
+                           key=lambda x: -(x[1] / x[2] if x[2] else 0))
+        out.excess = sum(1 for ln in every if ln.excess)
+    return out
+
+
 def build(db: Session, **flags) -> dict:
     now = utcnow()
     return {"now": now, "hauling": hauling_summary(db, now),
             "industry": industry_summary(db, now), "attention": attention(db, now, **flags),
             "isk_weeks": isk_by_week(db, now), "top_customers": top_customers(db, now),
-            "deadlines": deadlines(db, now), "jobs_24h": jobs_next_24h(db, now),
-            "idle": idle_characters(db), "queues": skill_queues(db, now)}
+            "deadlines": deadlines(db, now, limit=5), "jobs_24h": jobs_next_24h(db, now, limit=6),
+            "idle": idle_characters(db), "queues": skill_queues(db, now),
+            "stock": stock_summary(db),
+            "linked": db.scalar(select(func.count()).select_from(Character)) or 0}
