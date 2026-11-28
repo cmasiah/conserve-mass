@@ -4,13 +4,11 @@
 {% macro pips(level, queued=0) -%}
   <span class="pips" aria-label="level {{ level }}{{ ', training to ' ~ queued if queued > level }}">{% for i in range(5) %}<i class="{{ 'on' if i < level else ('q' if i < queued) }}"></i>{% endfor %}</span>
 {%- endmacro %}
-{#- 📡 + jump range when a remote skill is trained (like "→ 5" for a queued level, a
-    queued remote level shows "→ 25j"). Nothing = only jobs in the system you're in. -#}
+{#- 📡 when a remote skill is trained (or queued); the range is in its hover and in the
+    slot tooltip. Nothing = only jobs in the system you're in. -#}
 {% macro remote_tag(rm) -%}
   {%- if rm.level or rm.queued_jumps > rm.jumps -%}
-  <span class="remote-tag" title="{{ rm.name }} {{ rm.level }}: start jobs {{ rm.reach }}{{ ' · training to ' ~ rm.queued_jumps ~ ' jumps' if rm.queued_jumps > rm.jumps }}">
-    {%- if rm.level %}📡 {{ rm.jumps }}j{% endif %}{% if rm.queued_jumps > rm.jumps %}<span class="q-note"> → {{ rm.queued_jumps }}j</span>{% endif -%}
-  </span>
+  <span class="remote-tag {{ 'queued' if not rm.level }}" title="{{ rm.name }} {{ rm.level }}: start jobs {{ rm.reach }}{{ ' · training to ' ~ rm.queued_jumps ~ ' jumps' if rm.queued_jumps > rm.jumps }}">📡</span>
   {%- endif -%}
 {%- endmacro %}
 {% macro slotcell(r, cat) -%}
