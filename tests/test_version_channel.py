@@ -12,8 +12,12 @@ def test_beta_compares_commits_not_versions():
     same_version_new_commit = VersionInfo(current="0.5.0", latest="0.5.0", channel="beta",
                                           current_sha=a, latest_sha=b, image_ready=False)
     assert same_version_new_commit.newer and same_version_new_commit.building
-    assert same_version_new_commit.current_label == "0.5.0-beta+aaaaaaa"
-    assert same_version_new_commit.latest_label == "0.5.0-beta+bbbbbbb"
+    # Plain numbers, no commit hashes: the running build knows its own number, and the
+    # newest one is named from the v0.5.N-beta tag CI put on its commit.
+    assert same_version_new_commit.current_label == "0.5.0 beta"
+    assert same_version_new_commit.latest_label == "the newest beta"
+    same_version_new_commit.sha_versions = {b: "0.5.1"}
+    assert same_version_new_commit.latest_label == "0.5.1 beta"
     assert not VersionInfo(current="0.5.0", latest="0.5.0", channel="beta",
                            current_sha=a, latest_sha=a).newer
     # A local build without a commit never shows an update.
@@ -129,3 +133,38 @@ def test_build_list_shows_one_upgrade_the_running_build_and_three_rollbacks():
     for x in b:
         x["current"] = False                            # running build not listed
     assert [x["kind"] for x in trim_builds(b)] == ["upgrade", "rollback", "rollback", "rollback"]
+
+
+
+def test_beta_numbers_from_ci_tags_and_build_labels():
+    import asyncio
+
+    from app.services import version
+
+    class R:
+        def __init__(self, code, data):
+            self.status_code, self._d = code, data
+
+        def json(self):
+            return self._d
+
+    class Client:
+        async def get(self, url, params=None, headers=None):
+            if url.endswith("/tags"):
+                return R(200, [{"name": "v0.7.2-beta", "commit": {"sha": "B" * 40}},
+                               {"name": "v0.7.1-beta", "commit": {"sha": "a" * 40}},
+                               {"name": "v0.7.0", "commit": {"sha": "c" * 40}},
+                               {"name": "random", "commit": {"sha": "d" * 40}}])
+            return R(404, {})
+    nums = asyncio.run(version.beta_numbers(Client(), "o/r"))
+    assert nums == {"b" * 40: "0.7.2", "a" * 40: "0.7.1"}
+
+
+def test_build_version_from_the_image_wins(monkeypatch):
+    import importlib
+
+    import app.config as cfg
+    monkeypatch.setenv("APP_BUILD_VERSION", "0.7.12")
+    assert importlib.reload(cfg).APP_VERSION == "0.7.12"
+    monkeypatch.delenv("APP_BUILD_VERSION")
+    assert importlib.reload(cfg).APP_VERSION == "0.7.0"

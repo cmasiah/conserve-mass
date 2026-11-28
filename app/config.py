@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -5,7 +6,11 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_NAME = "Conserve Mass Ops"
-APP_VERSION = "0.6.1"
+# Set by hand only for a release (0.7.0, 0.8.0 ...). Beta builds number themselves from
+# it: each merge into beta is the next patch (0.7.1, 0.7.2 ...), worked out by CI and
+# baked into the image as APP_BUILD_VERSION.
+APP_VERSION = "0.7.0"
+APP_VERSION = os.environ.get("APP_BUILD_VERSION", "").strip() or APP_VERSION
 
 
 class Settings(BaseSettings):
