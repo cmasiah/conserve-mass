@@ -55,12 +55,16 @@ REACTIONS_PREREQ = "Reactions"   # no reaction jobs at all without it
 CAPITAL_SKILL = "Capital Ship Construction"
 CAPITAL_TIERS = {
     0: "None",
-    1: "Components",
-    2: "Components",
+    1: "Components only",
+    2: "Components only",
     3: "Capital Hulls",
     4: "JF & Supers",
     5: "Titans",
 }
+GOLD_SLOTS = 10   # a "full" industry character: 10+ slots of a kind
+# Hover rows for Capital Ship Construction: (lowest level, label, tier)
+CAPITAL_TIER_ROWS = [(1, "Level 1–2", "Components only"), (3, "Level 3", "Capital Hulls"),
+                     (4, "Level 4", "JF & Supers"), (5, "Level 5", "Titans")]
 # Remote-start skills: without them, jobs can only be started in your current system.
 REMOTE_SKILLS = {
     "manufacturing": "Supply Chain Management",

@@ -19,7 +19,7 @@ def test_slot_capacity_matches_skill_rules():
 def test_capital_tiers():
     from app.services.industry import capital_tier
     assert capital_tier({}) == (0, "None")
-    assert capital_tier({"Capital Ship Construction": 1}) == (1, "Components")
+    assert capital_tier({"Capital Ship Construction": 1}) == (1, "Components only")
     assert capital_tier({"Capital Ship Construction": 3}) == (3, "Capital Hulls")
     assert capital_tier({"Capital Ship Construction": 4})[1] == "JF & Supers"
     assert capital_tier({"Capital Ship Construction": 5})[1] == "Titans"
@@ -121,3 +121,50 @@ def test_slot_breakdown_lists_skills_and_remote_range():
     # Queued levels are reported separately from trained ones (white vs blue pips)
     q = slot_breakdown({"Mass Production": 3}, "manufacturing", {"Mass Production": 5})
     assert (q["rows"][0]["level"], q["rows"][0]["queued"]) == (3, 5)
+
+
+def test_slots_filters_sorting_and_highlights(db):
+    from fastapi.testclient import TestClient
+    from starlette.requests import Request
+    from app.main import app
+    from app.models import Character, CharacterSkill, EntityName
+    skills = {"Industry": 3380, "Mass Production": 3387, "Advanced Mass Production": 24625,
+              "Capital Ship Construction": 22242}
+    for n, i in skills.items():
+        db.add(EntityName(entity_id=i, name=n, category="inventory_type"))
+    for cid, name, mp, cap in [(1, "Alpha", 5, 5), (2, "Bravo", 2, 1), (3, "Charlie", 5, 3)]:
+        db.add(Character(character_id=cid, name=name))
+        for n, i in skills.items():
+            lvl = {"Mass Production": mp, "Advanced Mass Production": mp,
+                   "Capital Ship Construction": cap}.get(n, 5)
+            db.add(CharacterSkill(character_id=cid, skill_id=i, trained_level=lvl,
+                                  active_level=lvl))
+    db.commit()
+
+    async def login(request: Request):
+        request.session["user"] = {"character_id": 1, "name": "Alpha"}
+        return {}
+    app.add_api_route("/__test/login3", login)
+    try:
+        c = TestClient(app)
+        c.get("/__test/login3")
+        html = c.get("/industry/slots?only=under:manufacturing").text
+        assert "Bravo" in html and "Alpha" not in html.split("<tbody>")[1]
+        assert "slotcell short" in html
+        html = c.get("/industry/slots?only=gold:manufacturing").text
+        body = html.split("<tbody>")[1]
+        assert "Alpha" in body and "Charlie" in body and "Bravo" not in body
+        assert "slotcell gold" in html
+        body = c.get("/industry/slots?sort=capital&dir=desc").text.split("<tbody>")[1]
+        assert body.index("Alpha") < body.index("Charlie") < body.index("Bravo")
+        body = c.get("/industry/slots?sort=capital&dir=asc").text.split("<tbody>")[1]
+        assert body.index("Bravo") < body.index("Charlie") < body.index("Alpha")
+        body = c.get("/industry/slots?sort=name&dir=desc").text.split("<tbody>")[1]
+        assert body.index("Charlie") < body.index("Bravo") < body.index("Alpha")
+        assert 'class="tier tier-5"' in body and "Level 1–2" in body
+        assert "Components only" in body
+        jobs = c.get("/industry/jobs?owner=corporation").text
+        assert '<option value="corporation" selected>' in jobs
+    finally:
+        app.router.routes[:] = [r for r in app.router.routes
+                                if getattr(r, "path", "") != "/__test/login3"]

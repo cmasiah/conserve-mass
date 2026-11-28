@@ -41,7 +41,8 @@ def _missing_scopes(db: Session) -> list[tuple[Character, list[str]]]:
 
 
 @router.get("/slots")
-def slots(request: Request, sort: str = "name", only: str = "", db: Session = Depends(get_db)):
+def slots(request: Request, sort: str = "name", dir: str = "", only: str = "",
+          db: Session = Depends(get_db)):
     everyone = industry.character_overview(db)
     synced = [r for r in everyone if r.has_skills]
     # Command-center totals always cover every tracked character, whatever the filter.
@@ -49,23 +50,39 @@ def slots(request: Request, sort: str = "name", only: str = "", db: Session = De
                   "used": sum(r.used.get(c, 0) for r in synced),
                   "free": sum(r.free(c) for r in synced)} for c in CATS}
     capital_builders = sum(1 for r in synced if r.capital_level >= 1)
+    gold = industry.GOLD_SLOTS
 
     rows = list(everyone)
-    if only in CATS:
-        rows = [r for r in rows if r.capacity.get(only, 0) >= 10]
+    kind, _, cat = only.partition(":")        # "gold:manufacturing", "under:science"
+    if kind == "gold" and cat in CATS:
+        rows = [r for r in rows if r.capacity.get(cat, 0) >= gold]
+    elif kind == "under" and cat in CATS:
+        # Below the gold standard: the characters whose skills are worth training.
+        rows = [r for r in rows if r.has_skills and r.capacity.get(cat, 0) < gold]
     elif only == "capital":
         rows = [r for r in rows if r.capital_level >= 1]
+
+    # Default direction: names A→Z, everything else biggest first. dir flips it.
+    desc = (sort != "name") if dir not in ("asc", "desc") else dir == "desc"
     if sort in CATS:
-        rows.sort(key=lambda r: (r.capacity.get(sort, 0), r.free(sort)), reverse=True)
+        rows.sort(key=lambda r: (r.capacity.get(sort, 0), r.free(sort)), reverse=desc)
     elif sort == "capital":
-        rows.sort(key=lambda r: r.capital_level, reverse=True)
+        rows.sort(key=lambda r: (r.capital_level, r.queued.get("Capital Ship Construction", 0)),
+                  reverse=desc)
+    else:
+        sort = "name"
+        rows.sort(key=lambda r: (r.character.name or "").lower(), reverse=desc)
+    under_counts = {c: sum(1 for r in synced if r.capacity.get(c, 0) < gold) for c in CATS}
+    gold_counts = {c: sum(1 for r in synced if r.capacity.get(c, 0) >= gold) for c in CATS}
     detail = {r.character.character_id: {c: industry.slot_breakdown(r.levels, c, r.queued)
                                          for c in CATS}
               for r in rows if r.has_skills}
     return render(request, "industry_slots.html", rows=rows, sort=sort, only=only, cats=CATS,
+                  desc=desc, gold=gold, under_counts=under_counts, gold_counts=gold_counts,
                   labels=industry.CATEGORY_LABELS, totals=totals, detail=detail,
                   tracked=len(everyone), synced=len(synced), capital_builders=capital_builders,
-                  tiers=industry.CAPITAL_TIERS, missing=_missing_scopes(db), now=utcnow(),
+                  tiers=industry.CAPITAL_TIERS, tier_rows=industry.CAPITAL_TIER_ROWS,
+                  missing=_missing_scopes(db), now=utcnow(),
                   sync_feeds=sync_info.feeds(db, "industry"))
 
 
@@ -111,10 +128,15 @@ def group_jobs(view: list[dict]) -> list[dict]:
 
 
 @router.get("/jobs")
-def jobs(request: Request, cat: str = "", who: int = 0, db: Session = Depends(get_db)):
+def jobs(request: Request, cat: str = "", who: int = 0, owner: str = "",
+         db: Session = Depends(get_db)):
     q = select(IndustryJob).order_by(IndustryJob.end_date)
     if who:
         q = q.where(IndustryJob.installer_id == who)
+    if owner in ("corporation", "character"):
+        q = q.where(IndustryJob.owner_type == owner)
+    else:
+        owner = ""
     rows = db.scalars(q).all()
     if cat in CATS:
         rows = [j for j in rows if industry.ACTIVITY_CATEGORY.get(j.activity_id) == cat]
@@ -140,7 +162,7 @@ def jobs(request: Request, cat: str = "", who: int = 0, db: Session = Depends(ge
                      "corporation" and j.owner_id in corps else "Personal"})
     ready = sum(1 for v in view if v["done"])
     return render(request, "industry_jobs.html", groups=group_jobs(view), total=len(view),
-                  cat=cat, who=who, cats=CATS, labels=industry.CATEGORY_LABELS,
+                  cat=cat, who=who, owner=owner, cats=CATS, labels=industry.CATEGORY_LABELS,
                   installers=installers, ready=ready, now=now,
                   sync_feeds=sync_info.feeds(db, "industry", now))
 
