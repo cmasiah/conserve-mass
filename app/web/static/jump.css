@@ -1,0 +1,45 @@
+/* Hauling › Jump Planner (only loaded there) */
+.map-card { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; border-color: rgba(232,160,60,.4); }
+.map-card .meter { height: 6px; }
+.plan-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 12px 14px; margin-bottom: 14px; }
+.plan-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.plan-form label.check { flex-direction: row; align-items: center; gap: 6px; padding-bottom: 6px; }
+.plan-form input[name=frm], .plan-form input[name=to], .plan-form input[name=system] { width: 180px; }
+.pilot-stats { display: flex; gap: 14px; margin-left: auto; padding-bottom: 6px; color: var(--muted); }
+.pilot-stats strong { color: var(--text); }
+.route-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.route-sum .kpi { display: flex; flex-direction: column; padding: 12px 14px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--radius); }
+.kpi-v { font-size: 22px; font-weight: 700; } .kpi-l { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.kpi-s { font-size: 12px; color: var(--muted); }
+.route-table td { vertical-align: middle; }
+.sec { font-size: 11px; font-weight: 700; padding: 0 5px; border-radius: 4px; }
+.sec.hs { color: #2fb3ff; } .sec.ls { color: #e8a33c; background: rgba(232,163,60,.1); } .sec.ns { color: #f0605a; background: rgba(240,96,90,.1); }
+.ly-bar { display: inline-block; width: 60px; height: 5px; border-radius: 3px; background: #2a3441; vertical-align: middle; margin-left: 8px; overflow: hidden; }
+.ly-bar > span { display: block; height: 100%; background: var(--accent-2); }
+.gate-row td { background: rgba(47,179,255,.05); }
+.lane { margin-bottom: 8px; }
+.lane .fold-head { gap: 8px; }
+.trip { border-top: 1px solid var(--line); padding: 8px 0; }
+.trip-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.trip-fill { width: 120px; height: 6px; }
+.trip-line { display: flex; justify-content: space-between; padding: 3px 0 3px 14px; color: var(--text); text-decoration: none; }
+.trip-line:hover { color: var(--accent-2); }
+.pilot-card { margin-bottom: 12px; }
+.pilot-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.pilot-head img { border-radius: 50%; }
+.pilot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+.pilot-card .sub { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin: 8px 0 4px; }
+.skill-line { display: flex; justify-content: space-between; padding: 2px 0; }
+.pips { display: inline-flex; gap: 2px; } .pips i { width: 9px; height: 9px; background: #2a3441; border-radius: 1px; }
+.pips i.on { background: #e8edf3; }
+.result-line { display: grid; grid-template-columns: 110px 130px auto; align-items: center; gap: 8px; padding: 3px 0; }
+.result-line input { text-align: right; padding: 3px 6px; }
+.pilot-actions { display: flex; align-items: center; margin-top: 10px; }
+.bonus-form { display: flex; flex-direction: column; gap: 4px; }
+.bonus-form .result-line { grid-template-columns: 320px 90px auto; }
+.bonus-form button { align-self: flex-start; margin-top: 8px; }
+.check { display: inline-flex; gap: 6px; align-items: center; }
+.bad-text { color: var(--bad); }
+.lane .fold-body { padding: 8px 14px 10px; }
+.pilot-actions .spacer { flex: 1; }

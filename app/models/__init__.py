@@ -6,3 +6,4 @@ from app.models.industry import (  # noqa: F401
     Asset, AssetNode, AssetWatch, Blueprint, CharacterSkill, IndustryJob, MarketGroup,
     MaterialTarget, SkillQueue, TypeInfo,
 )  # noqa: F401
+from app.models.jump import CynoPoint, JumpPilot, MapSystem  # noqa: F401,E402
