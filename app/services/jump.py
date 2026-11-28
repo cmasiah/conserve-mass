@@ -291,6 +291,21 @@ async def ship_base(db: Session, type_id: int) -> dict | None:
     return base
 
 
+def stacking_penalty(i: int) -> float:
+    """EVE's stacking penalty for the i-th (0-based) strongest module on one attribute:
+    1, 0.869, 0.571, 0.283 ..."""
+    return math.exp(-((i / 2.67) ** 2))
+
+
+def economizer_factor(saving: float, count: int) -> float:
+    """Fuel multiplier for `count` economizers each saving `saving` (0.10), stacking-
+    penalized like in game: 3 x 10% = 22.5% saved, not 27.1%."""
+    f = 1.0
+    for i in range(max(0, count)):
+        f *= 1 - saving * stacking_penalty(i)
+    return f
+
+
 @dataclass
 class Profile:
     character_id: int
@@ -323,10 +338,11 @@ class Profile:
         return self.range_ly > 0 and self.fuel_per_ly > 0
 
     def fuel_with(self, economizers: int) -> float:
-        """Isotopes per LY with this many economizers fitted (for a leg's own fit)."""
+        """Isotopes per LY with this many economizers fitted (for a leg's own fit).
+        Economizers are stacking-penalized in game (expanders aren't)."""
         if not self.hull_fuel:
             return self.fuel_per_ly
-        return self.hull_fuel * (1 - self.bonus["economizer_fuel"]) ** economizers
+        return self.hull_fuel * economizer_factor(self.bonus["economizer_fuel"], economizers)
 
     @property
     def carried_econ(self) -> int:
@@ -347,7 +363,9 @@ class Profile:
         econ = (self.bonus or BONUS_DEFAULTS).get("economizer_fuel",
                                                   BONUS_DEFAULTS["economizer_fuel"])
         if "fuel_per_ly" in self.overridden or not self.hull_fuel:
-            return self.fuel_per_ly * (1 - econ) ** max(0, LOW_SLOTS - self.economizers)
+            # Overridden number = the current fit; scale it to all economizers.
+            return (self.fuel_per_ly * economizer_factor(econ, LOW_SLOTS)
+                    / economizer_factor(econ, self.economizers))
         return self.fuel_with(LOW_SLOTS)
 
     def for_leg(self, leg: str) -> "Profile":
@@ -655,10 +673,10 @@ def map_data(db: Session, legs: list[tuple[str, str, "Route"]], range_ly: float)
             continue
         out_legs.append({
             "title": title, "fit": fit,
-            "jumps": [[idx[lg.frm.system_id], idx[lg.to.system_id], round(lg.ly, 2), lg.fuel]
+            "jumps": [[idx[lg.frm.system_id], idx[lg.to.system_id], round(lg.ly, 4), lg.fuel]
                       for lg in r.legs],
             "gates": [idx[s] for s in r.gate_path if s in idx]})
-    return {"nodes": nodes, "gates": gates, "legs": out_legs, "range": round(range_ly, 2),
+    return {"nodes": nodes, "gates": gates, "legs": out_legs, "range": round(range_ly, 3),
             "has_gates": bool(gates)}
 
 
@@ -720,7 +738,7 @@ def trip_steps(legs: list[tuple[str, str, "Route"]], cyno_ids: set[int] = frozen
             steps.append({
                 "leg": li, "leg_title": title, "fit": fit, "kind": "jump", "index": i,
                 "from": lg.frm.name, "to": lg.to.name, "from_id": lg.frm.system_id,
-                "to_id": lg.to.system_id, "ly": round(lg.ly, 2), "fuel": lg.fuel,
+                "to_id": lg.to.system_id, "ly": round(lg.ly, 4), "fuel": lg.fuel,
                 "sec": round(lg.to.security, 1), "region": lg.to.region_name or "",
                 "role": ("destination" if last and not r.landing else
                          "landing" if last else f"mid {i + 1}"),

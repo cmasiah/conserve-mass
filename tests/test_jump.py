@@ -83,7 +83,7 @@ def test_profile_applies_skills_fit_and_overrides(db):
     assert p.cargo_m3 == pytest.approx(100000 * 1.25)
     # Leg-specific numbers for the packing ledger: loaded with 3 ORE, empty with 3 economizers.
     assert p.cargo_with(3) == pytest.approx(100000 * 1.25 * 1.29 ** 3)
-    assert p.fuel_with(3) == pytest.approx(10000 * 0.5 * 0.6 * 0.9 ** 3)
+    assert p.fuel_with(3) == pytest.approx(10000 * 0.5 * 0.6 * 0.9 * 0.91309 * 0.94294, rel=1e-4)
 
 
 def test_nomad_with_three_ore_expanders_matches_the_game():
@@ -95,8 +95,24 @@ def test_nomad_with_three_ore_expanders_matches_the_game():
     p.cargo_m3 = p.cargo_with(3)
     assert p.cargo_m3 == pytest.approx(354_203.7, abs=0.1)
     assert p.carried_econ == 3 and p.hold_m3 == pytest.approx(343_703.7, abs=0.1)
-    assert p.empty_fuel_per_ly == pytest.approx(1000 * 0.9 ** 3)
-    assert p.for_leg("empty").fuel_per_ly == pytest.approx(729) and p.for_leg("loaded") is p
+    assert p.empty_fuel_per_ly == pytest.approx(774.89, abs=0.01)   # stacking-penalized
+    assert p.for_leg("empty").fuel_per_ly == pytest.approx(774.89, abs=0.01)
+    assert p.for_leg("loaded") is p
+
+
+def test_economizers_are_stacking_penalized_like_in_game():
+    """In game: AC2E-3 -> C-N4OD, 5.661 LY, Nomad: 13,926 isotopes bare, 10,791 with three
+    Prototype economizers. That's 10% + 8.69% + 5.71% (penalized), not 3 x 10%."""
+    import math
+
+    from app.services.jump import economizer_factor, fuel_for, stacking_penalty
+    assert [round(stacking_penalty(i), 4) for i in range(3)] == [1.0, 0.8691, 0.5706]
+    assert economizer_factor(0.10, 3) == pytest.approx(0.77488, abs=1e-5)
+    per_ly = 2460.0                      # this Nomad, no economizers (13,926 / 5.661)
+    ly = 5.6607                          # the game shows it rounded to 5.661
+    assert fuel_for(ly, per_ly) == 13926
+    assert fuel_for(ly, per_ly * economizer_factor(0.10, 3)) == 10791
+    assert math.ceil(13926 * 0.9 ** 3) == 10153            # the old, wrong way
 
 
 def test_old_wrong_defaults_are_replaced_unless_from_game_data(db):
@@ -265,7 +281,7 @@ def test_trip_modes_plan_each_leg_with_its_own_fit(client, monkeypatch):
         return {o: [o, 99, dest] for o in origins}
     monkeypatch.setattr(svc, "gate_paths", paths)
     fuel_of = lambda html: [int(v.replace(",", "")) for v in re.findall(
-        r'kpi-v">([\d,]+)</span>\s*<span class="kpi-l">(?:📦 loaded|⛽ empty)', html)]
+        r'kpi-v">([\d,]+)</span>\s*<span class="kpi-l">[^<]*?(?:📦 loaded|⛽ empty)', html)]
     loaded = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=loaded").text
     empty = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=empty").text
     rt = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=empty_loaded").text

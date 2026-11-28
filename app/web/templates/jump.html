@@ -60,9 +60,9 @@
   {% elif not ready %}<span class="small warn-text">Needs a JF pilot: <a href="?tab=pilots">Pilots &amp; ships</a>.</span>{% endif %}
   {% if chosen %}
     <span class="pilot-stats small">
-      <span><strong>{{ '%.2f' | format(chosen.range_ly) }}</strong> LY range</span>
-      <span><strong>{{ '{:,.0f}'.format(chosen.fuel_per_ly) }}</strong> /LY loaded</span>
-      <span><strong>{{ '{:,.0f}'.format(chosen.empty_fuel_per_ly) }}</strong> /LY empty <span class="muted">(3 econ)</span></span>
+      <span><strong>{{ '%.3f' | format(chosen.range_ly) }}</strong> LY range</span>
+      <span><strong>{{ '{:,.1f}'.format(chosen.fuel_per_ly) }}</strong> {{ chosen.fuel_name }}/LY loaded</span>
+      <span><strong>{{ '{:,.1f}'.format(chosen.empty_fuel_per_ly) }}</strong>/LY empty <span class="muted">(3 econ)</span></span>
       <span title="{% if chosen.carried_econ %}{{ '{:,.1f}'.format(chosen.cargo_m3) }} m³ hold − {{ chosen.carried_econ }} economizer{{ 's' if chosen.carried_econ != 1 }} carried for the empty trip back{% endif %}"><strong>{{ '{:,.0f}'.format(chosen.hold_m3) }}</strong> m³{% if chosen.carried_econ %} <span class="muted">after {{ chosen.carried_econ }} econ in hold</span>{% endif %}</span>
       {% if chosen.max_collateral %}<span>≤ {{ chosen.max_collateral | isk }} collateral</span>{% endif %}
     </span>
@@ -81,11 +81,11 @@
     {% set tj = namespace(j=0, ly=0, f=0, g=0, unknown=false) %}
     {% for title, fit, r in good %}{% set tj.j = tj.j + r.jumps %}{% set tj.ly = tj.ly + r.total_ly %}{% set tj.f = tj.f + r.fuel %}{% set tj.g = tj.g + (r.gate_jumps or 0) %}{% if r.landing and r.gate_jumps is none %}{% set tj.unknown = true %}{% endif %}{% endfor %}
     <div class="kpi"><span class="kpi-v">{{ tj.j }}</span><span class="kpi-l">jump{{ 's' if tj.j != 1 }}{{ ' in total' if good | length > 1 }}</span>
-      <span class="kpi-s">{{ '%.1f' | format(tj.ly) }} LY{% if tj.g %} · + {{ tj.g }} gate{{ 's' if tj.g != 1 }}{% elif tj.unknown %} · + gates (count unavailable){% endif %}</span></div>
+      <span class="kpi-s">{{ '%.3f' | format(tj.ly) }} LY{% if tj.g %} · + {{ tj.g }} gate{{ 's' if tj.g != 1 }}{% elif tj.unknown %} · + gates (count unavailable){% endif %}</span></div>
     {% for title, fit, r in good %}
     <div class="kpi"><span class="kpi-v">{{ '{:,}'.format(r.fuel) }}</span>
-      <span class="kpi-l">{{ '📦 loaded' if fit == 'loaded' else '⛽ empty' }} · {{ title }}</span>
-      <span class="kpi-s">{{ r.jumps }} jump{{ 's' if r.jumps != 1 }} · {{ '{:,.0f}'.format(chosen.fuel_per_ly if fit == 'loaded' else chosen.empty_fuel_per_ly) }}/LY{% if price %} · {{ (r.fuel * price) | isk }}{% endif %}</span></div>
+      <span class="kpi-l">{{ chosen.fuel_name }} · {{ '📦 loaded' if fit == 'loaded' else '⛽ empty' }} · {{ title }}</span>
+      <span class="kpi-s">{{ r.jumps }} jump{{ 's' if r.jumps != 1 }} · {{ '%.3f' | format(r.total_ly) }} LY · {{ '{:,.1f}'.format(chosen.fuel_per_ly if fit == 'loaded' else chosen.empty_fuel_per_ly) }} per LY{% if price %} · {{ (r.fuel * price) | isk }}{% endif %}</span></div>
     {% endfor %}
     {% if good | length > 1 %}
     <div class="kpi total"><span class="kpi-v">{{ '{:,}'.format(tj.f) }}</span><span class="kpi-l">{{ chosen.fuel_name }} · round trip</span>
@@ -134,7 +134,7 @@
               <span class="jstep-n">{{ st.index + 1 }}</span>
               <span class="jstep-body"><span class="jstep-line"><strong>Jump to {{ st.to }}</strong> <span class="sec-t {{ 'hs' if st.sec >= 0.45 else ('ls' if st.sec > 0 else 'ns') }}">{{ st.sec }}</span>
                 <span class="pill small {{ 'ok' if st.role == 'destination' else ('info' if st.role == 'landing' else '') }}">{{ st.role }}</span>{% if st.my_cyno %} <span class="pill small ok" title="One of your cyno points">your cyno</span>{% endif %}</span>
-                <span class="small muted">Cyno lit in {{ st.to }}{{ ' · ' ~ st.region if st.region }} · {{ '%.2f' | format(st.ly) }} LY · {{ '{:,}'.format(st.fuel) }} isotopes</span></span>
+                <span class="small muted">Cyno lit in {{ st.to }}{{ ' · ' ~ st.region if st.region }} · {{ '%.3f' | format(st.ly) }} LY · {{ '{:,}'.format(st.fuel) }} {{ chosen.fuel_name }}</span></span>
             {% else %}
               <span class="jstep-n">⛩</span>
               <span class="jstep-body"><strong>Gate to {{ st.to }}</strong>
@@ -161,7 +161,7 @@
         <td class="muted">⟶</td>
         <td><strong>{{ leg.to.name }}</strong> <span class="sec {{ 'ls' if leg.to.security > 0 else 'ns' }}">{{ '%.1f' | format(leg.to.security) }}</span>
           <span class="muted small">{{ leg.to.region_name or '' }}</span></td>
-        <td class="num">{{ '%.2f' | format(leg.ly) }} LY
+        <td class="num">{{ '%.3f' | format(leg.ly) }} LY
           <span class="ly-bar"><span style="width: {{ (leg.ly / chosen.range_ly * 100) | round(0) }}%"></span></span></td>
         <td class="num">{{ isk_fuel(leg.fuel, chosen) }}</td></tr>
     {% else %}<tr><td colspan="6" class="muted">{{ 'Gates only.' if r.landing else 'Already there.' }}</td></tr>{% endfor %}
@@ -195,7 +195,7 @@
       {% if ln.route and ln.route.error %}<div class="small bad-text">{{ ln.route.error }}</div>
       {% elif ln.route %}
         <div class="small muted">Route: {{ ln.start.name }}{% for leg in ln.route.legs %} → {{ leg.to.name }}{% endfor %}{% if ln.route.landing %} ⛩ gates to {{ ln.end.name }} (high-sec; the Route tab counts them){% endif %}
-          · {{ '%.2f' | format(ln.route.total_ly) }} LY · {{ isk_fuel(ln.route.fuel, chosen) }} per trip</div>
+          · {{ '%.3f' | format(ln.route.total_ly) }} LY · {{ isk_fuel(ln.route.fuel, chosen) }} per trip</div>
       {% endif %}
       {% for t in ln.trips %}
         <div class="trip">
@@ -349,7 +349,7 @@
         {% for attr, label, unit, ov in [('range_ly', 'Max range', 'LY', jp.range_override), ('fuel_per_ly', 'Fuel per LY', p.fuel_name, jp.fuel_override), ('cargo_m3', 'Cargo', 'm³', jp.cargo_override)] %}
           <label class="result-line small"><span>{{ label }}</span>
             <input name="{{ attr.split('_')[0] }}_override" value="{{ ov if ov else '' }}"
-                   placeholder="{{ ('%.2f' | format(p[attr])) if attr == 'range_ly' else '{:,.0f}'.format(p[attr]) }}">
+                   placeholder="{{ ('%.3f' | format(p[attr])) if attr == 'range_ly' else '{:,.0f}'.format(p[attr]) }}">
             <span class="muted">{{ unit }}{% if attr in p.overridden %} · <strong>manual</strong>{% endif %}</span></label>
         {% endfor %}
         <label class="result-line small"><span>Max collateral</span>
