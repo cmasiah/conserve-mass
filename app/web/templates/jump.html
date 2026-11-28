@@ -45,9 +45,12 @@
     <label>To <span class="ac"><input name="to" value="{{ to }}" data-ac placeholder="e.g. AC2E-3" autocomplete="off" required></span></label>
   {% endif %}
   {% if tab == 'route' %}
-  <div class="leg-pick" role="radiogroup" aria-label="Leg">
-    <label title="Fitted as set on Pilots & ships (expanders for cargo)"><input type="radio" name="leg" value="loaded" {{ 'checked' if leg != 'empty' }}><span>📦 Loaded</span></label>
-    <label title="Every low slot an economizer, for flying out empty to pick up a load"><input type="radio" name="leg" value="empty" {{ 'checked' if leg == 'empty' }}><span>⛽ Empty · 3 economizers</span></label>
+  <div class="leg-pick" role="radiogroup" aria-label="Trip">
+    {% for key, (label, out_fit, back_fit) in trips.items() %}
+      <label title="{{ 'Loaded: fitted as set on Pilots & ships (expanders). Empty: every low slot an economizer.' }}">
+        <input type="radio" name="trip" value="{{ key }}" {{ 'checked' if trip == key }}>
+        <span>{{ '📦' if out_fit == 'loaded' else '⛽' }}{% if back_fit %} ⇄ {{ '📦' if back_fit == 'loaded' else '⛽' }}{% endif %} {{ label }}</span></label>
+    {% endfor %}
   </div>
   {% endif %}
   <label class="check"><input type="checkbox" name="cynos" value="1" {{ 'checked' if cynos }}> Only via my cyno points</label>
@@ -58,12 +61,9 @@
   {% if chosen %}
     <span class="pilot-stats small">
       <span><strong>{{ '%.2f' | format(chosen.range_ly) }}</strong> LY range</span>
-      {% if tab == 'route' and leg == 'empty' %}
-        <span><strong>{{ '{:,.0f}'.format(chosen.empty_fuel_per_ly) }}</strong> {{ chosen.fuel_name }}/LY <span class="muted">empty, 3 econ</span></span>
-      {% else %}
-        <span><strong>{{ '{:,.0f}'.format(chosen.fuel_per_ly) }}</strong> {{ chosen.fuel_name }}/LY</span>
-        <span title="{% if chosen.carried_econ %}{{ '{:,.1f}'.format(chosen.cargo_m3) }} m³ hold − {{ chosen.carried_econ }} economizer{{ 's' if chosen.carried_econ != 1 }} carried for the empty trip back{% endif %}"><strong>{{ '{:,.0f}'.format(chosen.hold_m3) }}</strong> m³{% if chosen.carried_econ %} <span class="muted">after {{ chosen.carried_econ }} econ in hold</span>{% endif %}</span>
-      {% endif %}
+      <span><strong>{{ '{:,.0f}'.format(chosen.fuel_per_ly) }}</strong> /LY loaded</span>
+      <span><strong>{{ '{:,.0f}'.format(chosen.empty_fuel_per_ly) }}</strong> /LY empty <span class="muted">(3 econ)</span></span>
+      <span title="{% if chosen.carried_econ %}{{ '{:,.1f}'.format(chosen.cargo_m3) }} m³ hold − {{ chosen.carried_econ }} economizer{{ 's' if chosen.carried_econ != 1 }} carried for the empty trip back{% endif %}"><strong>{{ '{:,.0f}'.format(chosen.hold_m3) }}</strong> m³{% if chosen.carried_econ %} <span class="muted">after {{ chosen.carried_econ }} econ in hold</span>{% endif %}</span>
       {% if chosen.max_collateral %}<span>≤ {{ chosen.max_collateral | isk }} collateral</span>{% endif %}
     </span>
   {% elif not profiles %}
@@ -72,60 +72,90 @@
 </form>
 {% endif %}
 
-{% if tab == 'route' and route %}
-  {% if route.error %}<div class="flash error">{{ route.error }}</div>
-  {% else %}
+{% if tab == 'route' and legs %}
+  {% set price = prices.get(chosen.fuel_type, 0) %}
+  {% for title, fit, r in legs %}{% if r.error %}<div class="flash error">{{ title }}: {{ r.error }}</div>{% endif %}{% endfor %}
+  {% set good = legs | rejectattr('2.error') | list %}
+  {% if good %}
   <div class="route-sum">
-    <div class="kpi"><span class="kpi-v">{{ route.jumps }}</span><span class="kpi-l">jump{{ 's' if route.jumps != 1 }}</span></div>
-    <div class="kpi"><span class="kpi-v">{{ '%.2f' | format(route.total_ly) }}</span><span class="kpi-l">light years</span></div>
-    {% set price = prices.get(chosen.fuel_type, 0) %}
-    <div class="kpi"><span class="kpi-v">{{ '{:,}'.format(route.fuel) }}</span><span class="kpi-l">{{ chosen.fuel_name }} · {{ 'empty leg' if leg == 'empty' else 'loaded leg' }}</span>
-      {% if price %}<span class="kpi-s">{{ (route.fuel * price) | isk }} at average price</span>{% endif %}</div>
-    {% if other_fuel is not none %}
-    <div class="kpi"><span class="kpi-v">{{ '{:,}'.format(route.fuel + other_fuel) }}</span><span class="kpi-l">round trip</span>
-      <span class="kpi-s">{{ '{:,}'.format(other_fuel) }} {{ 'loaded' if leg == 'empty' else 'empty (3 econ)' }} the other way{% if price %} · {{ ((route.fuel + other_fuel) * price) | isk }}{% endif %}</span></div>
+    {% set tj = namespace(j=0, ly=0, f=0, g=0, unknown=false) %}
+    {% for title, fit, r in good %}{% set tj.j = tj.j + r.jumps %}{% set tj.ly = tj.ly + r.total_ly %}{% set tj.f = tj.f + r.fuel %}{% set tj.g = tj.g + (r.gate_jumps or 0) %}{% if r.landing and r.gate_jumps is none %}{% set tj.unknown = true %}{% endif %}{% endfor %}
+    <div class="kpi"><span class="kpi-v">{{ tj.j }}</span><span class="kpi-l">jump{{ 's' if tj.j != 1 }}{{ ' in total' if good | length > 1 }}</span>
+      <span class="kpi-s">{{ '%.1f' | format(tj.ly) }} LY{% if tj.g %} · + {{ tj.g }} gate{{ 's' if tj.g != 1 }}{% elif tj.unknown %} · + gates (count unavailable){% endif %}</span></div>
+    {% for title, fit, r in good %}
+    <div class="kpi"><span class="kpi-v">{{ '{:,}'.format(r.fuel) }}</span>
+      <span class="kpi-l">{{ '📦 loaded' if fit == 'loaded' else '⛽ empty' }} · {{ title }}</span>
+      <span class="kpi-s">{{ r.jumps }} jump{{ 's' if r.jumps != 1 }} · {{ '{:,.0f}'.format(chosen.fuel_per_ly if fit == 'loaded' else chosen.empty_fuel_per_ly) }}/LY{% if price %} · {{ (r.fuel * price) | isk }}{% endif %}</span></div>
+    {% endfor %}
+    {% if good | length > 1 %}
+    <div class="kpi total"><span class="kpi-v">{{ '{:,}'.format(tj.f) }}</span><span class="kpi-l">{{ chosen.fuel_name }} · round trip</span>
+      {% if price %}<span class="kpi-s">{{ (tj.f * price) | isk }} at average price</span>{% endif %}</div>
     {% endif %}
-    {% if route.landing %}<div class="kpi"><span class="kpi-v">{{ route.gate_jumps if route.gate_jumps is not none else '?' }}</span><span class="kpi-l">gates after landing</span>
-      <span class="kpi-s">{{ route.dest.name }} is high-sec</span></div>{% endif %}
   </div>
-  {% if route_map %}{% set m = route_map %}
-  <div class="card route-map">
-    <svg viewBox="0 0 {{ m.w }} {{ m.h }}" role="img" aria-label="Map of the route">
-      <rect class="rm-bg" width="{{ m.w }}" height="{{ m.h }}"/>
-      {% for rg in m.rings %}<circle class="rm-ring" cx="{{ rg.x }}" cy="{{ rg.y }}" r="{{ rg.r }}"/>{% endfor %}
-      {% for lb in m.labels %}<text class="rm-region" x="{{ lb.x }}" y="{{ lb.y }}">{{ lb.name }}</text>{% endfor %}
-      {% for d in m.dots %}<circle class="rm-dot {{ d.sec }}" cx="{{ d.x }}" cy="{{ d.y }}" r="1.6"><title>{{ d.name }}</title></circle>{% endfor %}
-      {% if m.gate %}<line class="rm-gate" x1="{{ m.gate.x1 }}" y1="{{ m.gate.y1 }}" x2="{{ m.gate.x2 }}" y2="{{ m.gate.y2 }}"/>{% endif %}
-      {% for lg in m.legs %}
-        <path class="rm-jump" d="{{ lg.d }}" marker-end="url(#rm-arrow)"/>
-        <text class="rm-ly" x="{{ lg.lx }}" y="{{ lg.ly_y }}">{{ '%.1f' | format(lg.ly) }} LY</text>
-      {% endfor %}
-      {% for n in m.nodes %}
-        <g class="rm-node {{ n.role }}">
-          <circle cx="{{ n.x }}" cy="{{ n.y }}" r="{{ 7 if n.role in ('start', 'end') else 5 }}"/>
-          <text x="{{ n.x + 10 }}" y="{{ n.y - 9 }}">{{ n.name }} <tspan class="sec-t {{ n.sec_class }}">{{ n.sec }}</tspan></text>
-          <title>{{ n.name }} ({{ n.sec }})</title>
-        </g>
-      {% endfor %}
-      <defs><marker id="rm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" class="rm-arrowhead"/></marker></defs>
-      <g class="rm-scale" transform="translate(16 {{ m.h - 18 }})">
-        <line x1="0" y1="0" x2="{{ (m.scale_ly * m.px_per_ly) | round(1) }}" y2="0"/>
-        <text x="0" y="-6">{{ m.scale_ly }} LY</text></g>
-    </svg>
-    <div class="rm-legend small muted">
-      <span><i class="rm-key jump"></i> jump</span>
-      {% if m.gate %}<span><i class="rm-key gate"></i> gates (high-sec)</span>{% endif %}
-      <span><i class="rm-key ring"></i> {{ '%.1f' | format(chosen.range_ly) }} LY range from each stop</span>
-      <span><i class="rm-key dot hs"></i> high</span><span><i class="rm-key dot ls"></i> low</span><span><i class="rm-key dot ns"></i> null-sec</span>
-      <span class="spacer"></span><span>Top-down, north up. Range rings are flat; real distance also counts height.</span>
+
+  {% if map %}
+  <div class="card jmap-card">
+    <div class="jmap-wrap">
+      <svg id="jmap" class="jmap" role="img" aria-label="Map of the planned jumps"></svg>
+      <div class="jmap-tools">
+        <button type="button" data-zoom="in" title="Zoom in">+</button>
+        <button type="button" data-zoom="out" title="Zoom out">−</button>
+        <button type="button" data-zoom="fit" title="Show the whole trip">⤢</button>
+      </div>
+      <div class="jmap-legend small">
+        <span><i class="k jump"></i>jump</span>{% if map.legs | length > 1 %}<span><i class="k back"></i>return</span>{% endif %}
+        <span><i class="k gate"></i>stargate</span><span><i class="k gpath"></i>gates to high-sec</span>
+        <span><i class="k ring"></i>{{ map.range }} LY range</span>
+      </div>
+      {% if not map.has_gates %}
+      <form method="post" action="/jump/map/gates" class="jmap-nogates small">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        {% if gates_status.state == 'running' %}Downloading stargates{% if gates_status.done %} ({{ gates_status.done }} / {{ gates_status.total }}){% endif %}… refresh in a minute.
+        {% else %}Stargate lines need a one-time download. <button class="small">Download stargates</button>
+          {% if gates_status.state == 'failed' %}<span class="bad-text">Last try failed: {{ gates_status.error }}</span>{% endif %}{% endif %}
+      </form>
+      {% endif %}
+    </div>
+    <div class="jsteps">
+      <div class="jsteps-head">
+        <strong>Step by step</strong>
+        <span class="spacer"></span>
+        <button type="button" class="small" data-step="prev" title="Previous (←)">‹</button>
+        <span class="small muted" id="jstep-pos">All</span>
+        <button type="button" class="small" data-step="next" title="Next (→)">›</button>
+      </div>
+      <ol class="jsteps-list">
+        {% set cur = namespace(leg=-1) %}
+        {% for st in steps %}
+          {% if st.leg != cur.leg %}{% set cur.leg = st.leg %}
+            <li class="jstep-leg">{{ '📦 Loaded' if st.fit == 'loaded' else '⛽ Empty' }} · {{ st.leg_title }}</li>{% endif %}
+          <li class="jstep" data-i="{{ loop.index0 }}" tabindex="0">
+            {% if st.kind == 'jump' %}
+              <span class="jstep-n">{{ st.index + 1 }}</span>
+              <span class="jstep-body"><span class="jstep-line"><strong>Jump to {{ st.to }}</strong> <span class="sec-t {{ 'hs' if st.sec >= 0.45 else ('ls' if st.sec > 0 else 'ns') }}">{{ st.sec }}</span>
+                <span class="pill small {{ 'ok' if st.role == 'destination' else ('info' if st.role == 'landing' else '') }}">{{ st.role }}</span>{% if st.my_cyno %} <span class="pill small ok" title="One of your cyno points">your cyno</span>{% endif %}</span>
+                <span class="small muted">Cyno lit in {{ st.to }}{{ ' · ' ~ st.region if st.region }} · {{ '%.2f' | format(st.ly) }} LY · {{ '{:,}'.format(st.fuel) }} isotopes</span></span>
+            {% else %}
+              <span class="jstep-n">⛩</span>
+              <span class="jstep-body"><strong>Gate to {{ st.to }}</strong>
+                <span class="small muted">{{ st.gates if st.gates is not none else 'Some' }} gate{{ 's' if st.gates != 1 }} from {{ st.from }}: high-sec can't be jumped into</span></span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ol>
     </div>
   </div>
+  <script id="jmap-data" type="application/json">{{ map | tojson }}</script>
+  <script id="jmap-steps" type="application/json">{{ steps | tojson }}</script>
+  <script src="/static/jump-map.js?v={{ ASSET_V }}"></script>
   {% endif %}
+
+  {% for title, fit, r in good %}
+  <h3 class="leg-h">{{ '📦' if fit == 'loaded' else '⛽' }} {{ title }} <span class="muted small">{{ 'loaded' if fit == 'loaded' else 'empty, 3 economizers' }}</span></h3>
   <table class="route-table">
     <thead><tr><th>#</th><th>From</th><th></th><th>To</th><th class="num">Distance</th><th class="num">Fuel</th></tr></thead>
     <tbody>
-    {% for leg in route.legs %}
+    {% for leg in r.legs %}
       <tr><td class="muted">{{ loop.index }}</td>
         <td>{{ leg.frm.name }} <span class="sec {{ 'hs' if leg.frm.security >= 0.45 else ('ls' if leg.frm.security > 0 else 'ns') }}">{{ '%.1f' | format(leg.frm.security) }}</span></td>
         <td class="muted">⟶</td>
@@ -134,15 +164,17 @@
         <td class="num">{{ '%.2f' | format(leg.ly) }} LY
           <span class="ly-bar"><span style="width: {{ (leg.ly / chosen.range_ly * 100) | round(0) }}%"></span></span></td>
         <td class="num">{{ isk_fuel(leg.fuel, chosen) }}</td></tr>
-    {% else %}<tr><td colspan="6" class="muted">Already there.</td></tr>{% endfor %}
-    {% if route.landing %}
-      <tr class="gate-row"><td class="muted">⛩</td><td colspan="5">Then <strong>{{ route.gate_jumps if route.gate_jumps is not none else 'some' }} gate jump{{ 's' if route.gate_jumps != 1 }}</strong>
-        from {{ route.landing.name }} to {{ route.dest.name }} (high-sec can't be jumped into).</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">{{ 'Gates only.' if r.landing else 'Already there.' }}</td></tr>{% endfor %}
+    {% if r.landing %}
+      <tr class="gate-row"><td class="muted">⛩</td><td colspan="5">Then <strong>{{ r.gate_jumps if r.gate_jumps is not none else 'some' }} gate jump{{ 's' if r.gate_jumps != 1 }}</strong>
+        from {{ r.landing.name }} to {{ r.dest.name }} (high-sec can't be jumped into).</td></tr>
     {% endif %}
     </tbody>
   </table>
-  <p class="small muted">Fewest jumps first, then the shortest total distance (least fuel). Jump fatigue isn't
-    shown: CCP doesn't expose your current fatigue timer.</p>
+  {% endfor %}
+  <p class="small muted">Fewest jumps first, then the shortest total distance (least fuel). Loaded legs use the fit
+    on Pilots &amp; ships; empty legs assume all three low slots are economizers. Jump fatigue isn't shown: CCP
+    doesn't expose your current fatigue timer.</p>
   {% endif %}
 {% endif %}
 

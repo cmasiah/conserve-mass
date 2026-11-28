@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.db import session_scope, utcnow
 from app.esi import client as esi
 from app.models import (
+    MapGate,
     Asset, Character, CharacterSkill, Contract, CynoPoint, EntityName, JumpPilot, Location,
     MapSystem, Setting, TypeInfo,
 )
@@ -160,11 +161,109 @@ async def import_map(concurrency: int = 12) -> int:
             _set_json(db, "jump:map_status", {"state": "done", "finished": utcnow().isoformat(),
                                               "total": len(ids)})
         _GRAPHS.clear()
+        with session_scope() as db:
+            need_gates = db.query(MapGate).count() == 0
+        if need_gates:
+            await import_gates()
         return len(systems)
     except Exception as e:  # noqa: BLE001 — show on the page, try again later
         log.exception("Star map import failed")
         with session_scope() as db:
             _set_json(db, "jump:map_status", {"state": "failed", "error": str(e)[:200]})
+        return 0
+
+
+# ------------------------------------------------------------------ stargates (for the map)
+
+# CCP's static data as CSV (one ~1 MB file); ESI is the slower fallback.
+GATES_CSV_URL = "https://www.fuzzwork.co.uk/dump/latest/mapSolarSystemJumps.csv"
+
+
+def gates_status(db: Session) -> dict:
+    st = _get_json(db, "jump:gates_status", {})
+    st["gates"] = db.query(MapGate).count()
+    return st
+
+
+def parse_gates_csv(text: str) -> set[tuple[int, int]]:
+    import csv
+    import io
+    rows = csv.DictReader(io.StringIO(text))
+    out = set()
+    for r in rows:
+        try:
+            a, b = int(r["fromSolarSystemID"]), int(r["toSolarSystemID"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out |= {(a, b), (b, a)}
+    return out
+
+
+async def _gates_from_csv() -> set[tuple[int, int]]:
+    import httpx
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        r = await client.get(GATES_CSV_URL, headers={"User-Agent": "conserve-mass-ops"})
+        r.raise_for_status()
+        return parse_gates_csv(r.text)
+
+
+async def _gates_from_esi(system_ids: list[int], concurrency: int = 12) -> set[tuple[int, int]]:
+    """Every system's stargates, then each gate's destination: ~20k public calls."""
+    sem = asyncio.Semaphore(concurrency)
+
+    async def get(path):
+        async with sem:
+            try:
+                return await esi.get(path)
+            except esi.EsiError:
+                return None
+    gate_owner: dict[int, int] = {}
+    for start in range(0, len(system_ids), 500):
+        batch = system_ids[start:start + 500]
+        infos = await asyncio.gather(*(get(f"/universe/systems/{i}") for i in batch))
+        for sid, info in zip(batch, infos):
+            for g in (info or {}).get("stargates", []):
+                gate_owner[g] = sid
+        with session_scope() as db:
+            _set_json(db, "jump:gates_status", {"state": "running", "source": "ESI",
+                                                "done": start + len(batch),
+                                                "total": len(system_ids)})
+    out = set()
+    gates = [g for g in gate_owner]
+    for start in range(0, len(gates), 1000):
+        batch = gates[start:start + 1000]
+        infos = await asyncio.gather(*(get(f"/universe/stargates/{g}") for g in batch))
+        for g, info in zip(batch, infos):
+            dest = ((info or {}).get("destination") or {}).get("system_id")
+            if dest:
+                out |= {(gate_owner[g], dest), (dest, gate_owner[g])}
+    return out
+
+
+async def import_gates() -> int:
+    """Download stargate connections once (for drawing the map). Returns pairs stored."""
+    with session_scope() as db:
+        _set_json(db, "jump:gates_status", {"state": "running"})
+        known = set(db.scalars(select(MapSystem.system_id)))
+    try:
+        try:
+            pairs, source = await _gates_from_csv(), "static data"
+        except Exception as e:  # noqa: BLE001 — fall back to ESI
+            log.info("Stargate CSV unavailable (%s); using ESI", e)
+            pairs, source = set(), ""
+        if len(pairs) < 1000:
+            pairs, source = await _gates_from_esi(sorted(known)), "ESI"
+        pairs = {(a, b) for a, b in pairs if a in known and b in known}
+        with session_scope() as db:
+            db.query(MapGate).delete()
+            db.bulk_save_objects([MapGate(from_id=a, to_id=b) for a, b in pairs])
+            _set_json(db, "jump:gates_status", {"state": "done", "source": source,
+                                                "finished": utcnow().isoformat()})
+        return len(pairs)
+    except Exception as e:  # noqa: BLE001
+        log.exception("Stargate import failed")
+        with session_scope() as db:
+            _set_json(db, "jump:gates_status", {"state": "failed", "error": str(e)[:200]})
         return 0
 
 
@@ -419,6 +518,7 @@ class Route:
     legs: list[Leg] = field(default_factory=list)
     landing: MapSystem | None = None      # when the destination is high-sec
     gate_jumps: int | None = None          # gates from landing to destination (None: not looked up)
+    gate_path: list[int] = field(default_factory=list)  # system ids, landing .. destination
     error: str | None = None
 
     @property
@@ -505,99 +605,61 @@ def plan_route(db: Session, origin_id: int, dest_id: int, p: Profile,
     return r
 
 
-def other_leg_fuel(route: "Route", p: Profile, leg: str) -> int:
-    """Fuel for the same jumps fitted the other way (loaded <-> empty)."""
-    fpl = p.fuel_per_ly if leg == "empty" else p.empty_fuel_per_ly
-    return sum(fuel_for(lg.ly, fpl) for lg in route.legs)
+MAP_MAX_SYSTEMS = 1600
 
 
-def route_map(db: Session, route: "Route", range_ly: float, width: int = 960,
-              height: int = 440, max_background: int = 1800) -> dict | None:
-    """A flat, top-down view of the route like the in-game map (north up): EVE's x runs
-    left-right and z runs up (Jita is above Amarr). Returns screen coordinates for the
-    route, nearby systems for context, region labels and each jump's range ring."""
-    if route is None or route.error or not route.legs:
+def map_data(db: Session, legs: list[tuple[str, str, "Route"]], range_ly: float) -> dict | None:
+    """Everything the Dotlan-style map needs, as plain JSON: the systems of every region
+    the trip touches (positions top-down, north up: x right, z up), their stargates, the
+    jumps of each leg and the gate path after a high-sec landing."""
+    routes = [r for _t, _f, r in legs if r and not r.error and (r.legs or r.landing)]
+    if not routes:
         return None
-    pts = [route.origin] + [lg.to for lg in route.legs]
-    if route.landing and route.dest not in pts:
-        pts.append(route.dest)
-    xs, zs = [s.x for s in pts], [s.z for s in pts]
-    span = max(max(xs) - min(xs), max(zs) - min(zs), 4 * LY_M)
-    pad = max(span * 0.12, 1.5 * LY_M)
-    x0, x1, z0, z1 = min(xs) - pad, max(xs) + pad, min(zs) - pad, max(zs) + pad
-    # Keep the view's shape: widen the narrow side to the canvas's aspect ratio.
-    want = width / height
-    if (x1 - x0) / (z1 - z0) < want:
-        extra = ((z1 - z0) * want - (x1 - x0)) / 2
-        x0, x1 = x0 - extra, x1 + extra
-    else:
-        extra = ((x1 - x0) / want - (z1 - z0)) / 2
-        z0, z1 = z0 - extra, z1 + extra
-    k = width / (x1 - x0)
-
-    def xy(s):
-        return round((s.x - x0) * k, 1), round((z1 - s.z) * k, 1)
-
-    bg = db.scalars(select(MapSystem).where(MapSystem.x.between(x0, x1),
-                                            MapSystem.z.between(z0, z1))
-                    .limit(max_background)).all()
-    on_route = {s.system_id for s in pts}
-    regions: dict[str, list] = {}
-    dots = []
-    for s in bg:
-        if s.system_id in on_route:
+    on_route: dict[int, MapSystem] = {}
+    for r in routes:
+        for s in [r.origin, r.dest, r.landing] + [lg.to for lg in r.legs]:
+            if s is not None:
+                on_route[s.system_id] = s
+        for sid in r.gate_path:
+            if sid not in on_route and (s := db.get(MapSystem, sid)):
+                on_route[sid] = s
+    regions = {s.region_id for s in on_route.values() if s.region_id}
+    ctx = db.scalars(select(MapSystem).where(MapSystem.region_id.in_(regions))).all() \
+        if regions else []
+    if len(ctx) > MAP_MAX_SYSTEMS:
+        # Many regions: keep what's near the route.
+        xs = [s.x for s in on_route.values()]
+        zs = [s.z for s in on_route.values()]
+        pad = 6 * LY_M
+        ctx = [s for s in ctx if min(xs) - pad <= s.x <= max(xs) + pad
+               and min(zs) - pad <= s.z <= max(zs) + pad][:MAP_MAX_SYSTEMS]
+    systems = {s.system_id: s for s in ctx} | on_route
+    ids = list(systems)
+    idx = {sid: i for i, sid in enumerate(ids)}
+    nodes = [{"id": sid, "n": s.name, "s": round(s.security, 1),
+              "x": round(s.x / LY_M, 3), "y": round(-s.z / LY_M, 3),
+              "c": s.constellation_id, "r": s.region_id or 0, "rn": s.region_name or "",
+              "on": sid in on_route} for sid, s in systems.items()]
+    gates = []
+    if ids:
+        for a, b in db.execute(select(MapGate.from_id, MapGate.to_id).where(
+                MapGate.from_id.in_(ids), MapGate.to_id.in_(ids))):
+            if a < b:
+                sa, sb = systems[a], systems[b]
+                kind = 2 if sa.region_id != sb.region_id else (
+                    1 if sa.constellation_id != sb.constellation_id else 0)
+                gates.append([idx[a], idx[b], kind])
+    out_legs = []
+    for title, fit, r in legs:
+        if not r or r.error:
             continue
-        px, py = xy(s)
-        dots.append({"x": px, "y": py, "sec": _sec_class(s.security), "name": s.name})
-        if s.region_name:
-            regions.setdefault(s.region_name, []).append((px, py))
-    labels = []
-    for n, ps in sorted(regions.items(), key=lambda kv: -len(kv[1])):
-        if len(ps) < 6:
-            continue
-        lx, ly_ = round(sum(p[0] for p in ps) / len(ps)), round(sum(p[1] for p in ps) / len(ps))
-        if all(abs(lx - o["x"]) > 170 or abs(ly_ - o["y"]) > 34 for o in labels):
-            labels.append({"name": n, "x": lx, "y": ly_})
-    nodes = []
-    for i, s in enumerate(pts):
-        px, py = xy(s)
-        role = ("start" if i == 0 else "end" if s is route.dest
-                else "landing" if s is route.landing else "mid")
-        nodes.append({"x": px, "y": py, "name": s.name, "sec": round(s.security, 1),
-                      "sec_class": _sec_class(s.security), "role": role})
-    legs = []
-    for lg in route.legs:
-        (ax, ay), (bx, by) = xy(lg.frm), xy(lg.to)
-        # Bow each jump a little to the left of its direction, like Dotlan's arcs.
-        mx, my = (ax + bx) / 2, (ay + by) / 2
-        dx, dy = bx - ax, by - ay
-        bend = 0.18
-        cx, cy = mx - dy * bend, my + dx * bend
-        # Distance label just outside the arc's bulge, away from the system names.
-        n = math.hypot(dx, dy) or 1
-        ox, oy = -dy / n * 13, dx / n * 13
-        legs.append({"d": f"M{ax},{ay} Q{cx:.1f},{cy:.1f} {bx},{by}", "ly": lg.ly,
-                     "lx": round((mx + cx) / 2 + ox, 1), "ly_y": round((my + cy) / 2 + oy + 4, 1)})
-    gate = None
-    if route.landing and route.dest is not route.landing:
-        (ax, ay), (bx, by) = xy(route.landing), xy(route.dest)
-        gate = {"x1": ax, "y1": ay, "x2": bx, "y2": by}
-    rings = [{"x": xy(lg.frm)[0], "y": xy(lg.frm)[1], "r": round(range_ly * LY_M * k, 1)}
-             for lg in route.legs]
-    return {"w": width, "h": height, "dots": dots, "labels": labels, "nodes": nodes,
-            "legs": legs, "gate": gate, "rings": rings,
-            "scale_ly": _nice_scale(width * 0.18 / (LY_M * k)), "px_per_ly": LY_M * k}
-
-
-def _sec_class(sec: float) -> str:
-    return "hs" if sec >= HIGHSEC else "ls" if sec > 0 else "ns"
-
-
-def _nice_scale(ly_wanted: float) -> int:
-    for n in (1, 2, 5, 10, 20, 50, 100):
-        if n >= ly_wanted * 0.6:
-            return n
-    return 100
+        out_legs.append({
+            "title": title, "fit": fit,
+            "jumps": [[idx[lg.frm.system_id], idx[lg.to.system_id], round(lg.ly, 2), lg.fuel]
+                      for lg in r.legs],
+            "gates": [idx[s] for s in r.gate_path if s in idx]})
+    return {"nodes": nodes, "gates": gates, "legs": out_legs, "range": round(range_ly, 2),
+            "has_gates": bool(gates)}
 
 
 def landing_candidates(db: Session, dest: MapSystem, g: Graph, limit: int = 6) -> list[MapSystem]:
@@ -606,14 +668,70 @@ def landing_candidates(db: Session, dest: MapSystem, g: Graph, limit: int = 6) -
     return [s for _d, s in near[:limit]]
 
 
-async def gate_counts(origins: list[int], dest: int) -> dict[int, int]:
-    """Gate jumps from each candidate to the destination (ESI /route, safest path)."""
+async def gate_paths(origins: list[int], dest: int) -> dict[int, list[int]]:
+    """Gate path (system ids, both ends included) from each candidate to the destination
+    (ESI /route, safest path). Unreachable: an empty list."""
     async def one(o):
         try:
-            return o, len(await esi.get(f"/route/{o}/{dest}", params={"flag": "secure"})) - 1
-        except esi.EsiError:
-            return o, 99
+            return o, list(await esi.get(f"/route/{o}/{dest}", params={"flag": "secure"}))
+        except Exception as e:  # noqa: BLE001 — ESI down / unreachable: plan without gates
+            log.info("Gate route %s -> %s unavailable: %s", o, dest, e)
+            return o, []
     return dict(await asyncio.gather(*(one(o) for o in origins)))
+
+
+async def gate_counts(origins: list[int], dest: int) -> dict[int, int]:
+    """Gate jumps from each candidate to the destination."""
+    return {o: (len(p) - 1 if p else 99) for o, p in (await gate_paths(origins, dest)).items()}
+
+
+async def plan_trip_leg(db: Session, a: MapSystem, b: MapSystem, p: Profile,
+                        only_cynos: bool = False) -> "Route":
+    """One direction, fitted as `p`; for a high-sec end, also the gates from the landing."""
+    paths = None
+    if not can_cyno(b):
+        cands = landing_candidates(db, b, graph(db, only_cynos))
+        paths = await gate_paths([c.system_id for c in cands], b.system_id)
+    # Only candidates with a known gate path count; unknown ones sort last, shown as "?".
+    gates = {o: len(x) - 1 for o, x in (paths or {}).items() if x} or None
+    r = plan_route(db, a.system_id, b.system_id, p, only_cynos, gates)
+    if r.landing and paths:
+        r.gate_path = paths.get(r.landing.system_id) or []
+    return r
+
+
+TRIPS = {
+    "loaded": ("One way, loaded", "loaded", None),
+    "empty": ("One way, empty", "empty", None),
+    "empty_loaded": ("Out empty, back loaded", "empty", "loaded"),
+    "loaded_empty": ("Out loaded, back empty", "loaded", "empty"),
+}
+
+
+def trip_steps(legs: list[tuple[str, str, "Route"]], cyno_ids: set[int] = frozenset()) -> list[dict]:
+    """Step-by-step: each jump (with where the cyno has to be), then any gates."""
+    steps = []
+    for li, (title, fit, r) in enumerate(legs):
+        if r.error:
+            continue
+        n = len(r.legs)
+        for i, lg in enumerate(r.legs):
+            last = i == n - 1
+            steps.append({
+                "leg": li, "leg_title": title, "fit": fit, "kind": "jump", "index": i,
+                "from": lg.frm.name, "to": lg.to.name, "from_id": lg.frm.system_id,
+                "to_id": lg.to.system_id, "ly": round(lg.ly, 2), "fuel": lg.fuel,
+                "sec": round(lg.to.security, 1), "region": lg.to.region_name or "",
+                "role": ("destination" if last and not r.landing else
+                         "landing" if last else f"mid {i + 1}"),
+                "my_cyno": lg.to.system_id in cyno_ids})
+        if r.landing:
+            steps.append({
+                "leg": li, "leg_title": title, "fit": fit, "kind": "gates",
+                "from": r.landing.name, "to": r.dest.name, "from_id": r.landing.system_id,
+                "to_id": r.dest.system_id, "gates": r.gate_jumps,
+                "path": [*getattr(r, "gate_path", [])]})
+    return steps
 
 
 async def isotope_prices(db: Session) -> dict[int, float]:

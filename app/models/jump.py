@@ -23,6 +23,17 @@ class MapSystem(Base):
     z: Mapped[float] = mapped_column(Float)
 
 
+class MapGate(Base):
+    """A stargate connection between two systems (stored both ways). Static; for drawing
+    the route map like Dotlan's region maps."""
+
+    __tablename__ = "map_gates"
+
+    from_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    to_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False,
+                                       index=True)
+
+
 class JumpPilot(Base):
     """One character's jump freighter setup. Detected from skills and assets; any value
     can be overridden with the real number from the in-game fitting window."""

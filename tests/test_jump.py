@@ -255,31 +255,62 @@ def test_route_page_shows_legs_fuel_and_cost(client):
     assert hits[0]["name"] == "AC2E-3" and hits[0]["region"] == "Fountain"
 
 
-def test_empty_leg_uses_three_economizers_and_route_has_a_map(client):
+def test_trip_modes_plan_each_leg_with_its_own_fit(client, monkeypatch):
+    import json
     import re
-    loaded = client.get("/jump?tab=route&frm=jita&to=ac2e-3").text
-    empty = client.get("/jump?tab=route&frm=jita&to=ac2e-3&leg=empty").text
-    fuel = lambda html: int(re.search(r'kpi-v">([\d,]+)</span><span class="kpi-l">Hydrogen',
-                                       html).group(1).replace(",", ""))
-    assert "loaded leg" in loaded and "empty leg" in empty
-    assert fuel(empty) < fuel(loaded) and "round trip" in empty
-    # Round trip = this leg + the other: the same total either way.
-    rt = lambda html: re.search(r'kpi-v">([\d,]+)</span><span class="kpi-l">round trip', html).group(1)
-    assert rt(empty) == rt(loaded)
-    # The flat map: one arc per jump, both ends labelled, range rings.
-    assert loaded.count('class="rm-jump"') == 2 and "rm-ring" in loaded
-    assert 'rm-node start' in loaded and 'rm-node end' in loaded
+
+    from app.services import jump as svc
+
+    async def paths(origins, dest):          # ESI /route: 2 gates from each candidate
+        return {o: [o, 99, dest] for o in origins}
+    monkeypatch.setattr(svc, "gate_paths", paths)
+    fuel_of = lambda html: [int(v.replace(",", "")) for v in re.findall(
+        r'kpi-v">([\d,]+)</span>\s*<span class="kpi-l">(?:📦 loaded|⛽ empty)', html)]
+    loaded = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=loaded").text
+    empty = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=empty").text
+    rt = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=empty_loaded").text
+    (fl,), (fe,) = fuel_of(loaded), fuel_of(empty)
+    assert fe < fl
+    out, back = fuel_of(rt)                        # empty out, loaded back
+    assert out == fe and back > 0 and "round trip" in rt
+    assert "AC2E-3 → Jita" in rt                 # the return leg is planned on its own
+    # The map's data and the steps are embedded for the browser.
+    data = json.loads(re.search(r'id="jmap-data" type="application/json">(.*?)</script>',
+                                rt, re.S).group(1))
+    assert len(data["legs"]) == 2 and data["legs"][0]["fit"] == "empty"
+    steps = json.loads(re.search(r'id="jmap-steps" type="application/json">(.*?)</script>',
+                                 rt, re.S).group(1))
+    assert steps[0]["kind"] == "jump" and steps[0]["role"].startswith("mid")
+    assert any(st["role"] == "destination" for st in steps)
+    assert "Step by step" in rt and "Jump to" in rt
+    assert any(st["kind"] == "gates" and st["gates"] == 2 for st in steps)   # into Jita
 
 
-def test_route_map_puts_north_up(world):
-    """Jita (z > 0) must be drawn above Amarr-like systems with z < 0, and x left-right."""
-    from app.models import MapSystem
-    from app.services.jump import Leg, Route, route_map
-    a = MapSystem(system_id=1, name="North", security=-0.5, x=0.0, y=0.0, z=9.46e16)
-    b = MapSystem(system_id=2, name="South", security=-0.5, x=9.46e16, y=0.0, z=-9.46e16)
-    m = route_map(world, Route(a, b, legs=[Leg(a, b, 20.0, 100)]), 10.0)
-    north, south = m["nodes"]
-    assert north["y"] < south["y"] and north["x"] < south["x"]
+def test_old_leg_parameter_still_works(client):
+    assert "⛽ empty" in client.get("/jump?tab=route&frm=jita&to=ac2e-3&leg=empty").text
+
+
+def test_map_data_north_up_gates_and_borders(world):
+    from app.models import MapGate, MapSystem
+    from app.services.jump import Leg, Route, map_data
+    a = MapSystem(system_id=91, name="North", constellation_id=1, region_id=7, security=-0.5,
+                  x=0.0, y=0.0, z=9.46e16)
+    b = MapSystem(system_id=92, name="South", constellation_id=2, region_id=7, security=-0.5,
+                  x=9.46e16, y=0.0, z=-9.46e16)
+    world.add_all([a, b, MapGate(from_id=91, to_id=92), MapGate(from_id=92, to_id=91)])
+    world.commit()
+    m = map_data(world, [("North → South", "loaded", Route(a, b, legs=[Leg(a, b, 20.0, 100)]))], 10)
+    nodes = {n["n"]: n for n in m["nodes"]}
+    assert nodes["North"]["y"] < nodes["South"]["y"] and nodes["North"]["x"] < nodes["South"]["x"]
+    assert m["gates"] == [[m["nodes"].index(nodes["North"]), m["nodes"].index(nodes["South"]), 1]]
+    assert m["legs"][0]["jumps"][0][2] == 20.0 and m["has_gates"]
+
+
+def test_gates_csv_is_read_both_ways():
+    from app.services.jump import parse_gates_csv
+    text = ("fromRegionID,fromConstellationID,fromSolarSystemID,toSolarSystemID,"
+            "toConstellationID,toRegionID\n1,2,30000001,30000002,2,1\nbad,row\n")
+    assert parse_gates_csv(text) == {(30000001, 30000002), (30000002, 30000001)}
 
 
 def test_pilots_and_cyno_pages(client, world):
@@ -405,3 +436,14 @@ def test_haul_page_end_to_end(client, world):
         "ore_1": "3", "econ_1": "3"}).text
     assert "Wave 1" in html and "Wave 2" in html            # 500k m3 over a ~318k hold
     assert "jumps in total" in html and "reward per jump" in html
+
+
+def test_esi_unreachable_still_plans_a_high_sec_trip(client, monkeypatch):
+    """No gate data from ESI (down, or unreachable): still plan, just without gate counts."""
+    from app.esi import client as esi
+
+    async def boom(*a, **k):
+        raise ConnectionError("ESI unreachable")
+    monkeypatch.setattr(esi, "get", boom)
+    html = client.get("/jump?tab=route&frm=jita&to=ac2e-3&trip=loaded_empty").text
+    assert "AC2E-3 → Jita" in html and "round trip" in html
