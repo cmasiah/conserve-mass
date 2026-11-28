@@ -374,6 +374,25 @@ def update_now(request: Request, csrf: str = Form("")):
     return _redirect("/system?updating=1")
 
 
+@router.post("/system/rollback")
+def rollback(request: Request, csrf: str = Form(""), tag: str = Form("")):
+    """Switch to one exact earlier build (until the next normal update)."""
+    require_csrf(request, csrf)
+    st = updater.status()
+    known = {b["tag"] for b in version.cached().builds}
+    if not version.valid_rollback_tag(tag) or tag not in known:
+        flash(request, "That build isn't in the list of available builds.", "error")
+    elif not st.installed or st.watcher_version < updater.ROLLBACK_WATCHER:
+        flash(request, "The host updater needs one normal update first before it can roll "
+                       "back (it picks up the newer updater script then).", "error")
+    elif st.pending:
+        flash(request, "An update is already in progress.", "error")
+    else:
+        updater.request_update(request.session["user"]["name"], tag=tag)
+        return _redirect("/system?updating=1")
+    return _redirect("/system")
+
+
 @router.post("/system/test-discord")
 def test_discord(request: Request, csrf: str = Form(""), db: Session = Depends(get_db)):
     require_csrf(request, csrf)

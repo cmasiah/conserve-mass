@@ -57,3 +57,61 @@ def test_beta_commits_never_ping(db, monkeypatch):
     notes = db.query(Notification).all()
     assert [n.title for n in notes] == ["🚀 Conserve Mass Ops 0.6.0 released"]
     assert db.get(Setting, version.RELEASE_SEEN_KEY).value == "0.6.0"
+
+
+def test_rollback_tags_are_strict():
+    from app.services.version import valid_rollback_tag
+    assert valid_rollback_tag("sha-" + "0123456789abcdef" * 2 + "01234567")
+    assert valid_rollback_tag("0.5.0")
+    for bad in ("beta", "latest", "sha-abc", "0.5", "0.5.0;reboot", "", "SHA-" + "a" * 40):
+        assert not valid_rollback_tag(bad), bad
+
+
+def test_recent_builds_beta_only_lists_published_commits(monkeypatch):
+    import asyncio
+    from app.services import version
+    monkeypatch.setattr(version, "CHANNEL", "beta")
+    monkeypatch.setattr(version, "GIT_SHA", "b" * 40)
+    commits = [{"sha": "b" * 7, "full_sha": "b" * 40, "message": "new", "date": None, "url": "u"},
+               {"sha": "c" * 7, "full_sha": "c" * 40, "message": "no image", "date": None,
+                "url": "u"},
+               {"sha": "a" * 7, "full_sha": "a" * 40, "message": "old", "date": None, "url": "u"}]
+
+    async def fake_tags(client, repo):
+        return ["beta", "sha-" + "a" * 40, "sha-" + "b" * 40, "0.5.0"]
+    monkeypatch.setattr(version, "_ghcr_tags", fake_tags)
+    builds = asyncio.run(version.recent_builds(None, "o/r", commits))
+    assert [b["message"] for b in builds] == ["new", "old"]
+    assert builds[0]["current"] and not builds[1]["current"]
+
+
+def test_rollback_route_validates_and_writes_the_request(db, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from starlette.requests import Request
+    from app.main import app
+    from app.services import updater, version
+    monkeypatch.setattr(updater, "_dir", lambda: tmp_path)
+    (tmp_path / "updater-heartbeat").write_text("watcher=2\n")
+    good = "sha-" + "a" * 40
+    version._cache.builds = [{"tag": good, "label": "aaaaaaa", "message": "", "date": None,
+                              "url": None, "current": False}]
+
+    async def login(request: Request):
+        request.session["user"] = {"character_id": 1, "name": "Boss"}
+        request.session["csrf"] = "t"
+        return {}
+    app.add_api_route("/__test/login5", login)
+    try:
+        c = TestClient(app)
+        c.get("/__test/login5")
+        r = c.post("/system/rollback", data={"csrf": "t", "tag": "sha-" + "f" * 40},
+                   follow_redirects=False)            # not in the list
+        assert r.headers["location"] == "/system"
+        assert not (tmp_path / "update-requested").exists()
+        r = c.post("/system/rollback", data={"csrf": "t", "tag": good}, follow_redirects=False)
+        assert r.headers["location"] == "/system?updating=1"
+        assert f"tag={good}" in (tmp_path / "update-requested").read_text()
+    finally:
+        version._cache.builds = []
+        app.router.routes[:] = [r for r in app.router.routes
+                                if getattr(r, "path", "") != "/__test/login5"]
