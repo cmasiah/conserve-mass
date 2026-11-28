@@ -97,7 +97,7 @@
   D.legs.forEach((leg, li) => leg.jumps.forEach(([a, b, ly], ji) => {
     const p = el('path', { class: 'jm-jump leg' + li, 'marker-end': `url(#jm-arrow${li})` }, L.jumps);
     const t = el('text', { class: 'jm-ly leg' + li }, L.jumps);
-    t.textContent = ly.toFixed(1) + ' LY';
+    t.textContent = ly.toFixed(3) + ' LY';
     jumpEls.push({ li, ji, a, b, p, t });
   }));
   const defs = el('defs', {}, svg);
