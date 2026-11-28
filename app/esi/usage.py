@@ -21,6 +21,7 @@ _FAMILIES = [
     (re.compile(r"^/corporations/\d+/contracts"), "Corp contracts"),
     (re.compile(r"^/characters/\d+/skillqueue"), "Skill queues"),
     (re.compile(r"^/characters/\d+/skills"), "Skills"),
+    (re.compile(r"^/characters/\d+/(implants|clones|attributes)"), "Implants & clones"),
     (re.compile(r"^/characters/\d+/industry/jobs"), "Personal jobs"),
     (re.compile(r"^/corporations/\d+/industry/jobs"), "Corp jobs"),
     (re.compile(r"^/characters/\d+/blueprints"), "Personal blueprints"),

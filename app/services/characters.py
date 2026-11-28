@@ -82,4 +82,6 @@ def remove(db: Session, char: Character) -> None:
     cleared here (same as switching Industry off). Corp data stays."""
     for key in ("industry", "skills"):
         set_tracking(db, char, key, False)
+    from app.services import charinfo
+    charinfo.drop(db, char.character_id)
     db.delete(char)

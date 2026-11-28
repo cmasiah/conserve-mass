@@ -297,6 +297,9 @@ async def sync_skills() -> None:
                 continue
             now = utcnow()
             skills = res.data.get("skills", [])
+            from app.services import charinfo
+            charinfo.update(db, cid, total_sp=res.data.get("total_sp"),
+                            unallocated_sp=res.data.get("unallocated_sp") or 0)
             db.execute(delete(CharacterSkill).where(CharacterSkill.character_id == cid))
             for s in skills:
                 db.add(CharacterSkill(character_id=cid, skill_id=s["skill_id"],
@@ -327,6 +330,10 @@ async def sync_skills() -> None:
             await resolver.resolve_names(db, {e["skill_id"] for e in (res.data or [])})
             db.commit()
 
+    # Implants, jump clones and attributes for the Characters page tabs (own session).
+    from app.services.charinfo import sync_character_info
+    await sync_character_info()
+
 
 def _parse_dt(v):
     if not v:
@@ -353,6 +360,10 @@ def store_skill_queue(db: Session, cid: int, entries: list[dict]) -> SkillQueue:
         k = str(e["skill_id"])
         top[k] = max(top.get(k, 0), e.get("finished_level") or 0)
     row.queued = json.dumps(top)
+    from app.services import charinfo
+    charinfo.update(db, cid, queue=[{"skill_id": e["skill_id"], "level": e.get("finished_level"),
+                                     "start": e.get("start_date"), "finish": e.get("finish_date")}
+                                    for e in live])
     row.updated_at = now
     db.merge(row)
     return row
