@@ -44,6 +44,12 @@
     <label>From <span class="ac"><input name="frm" value="{{ frm }}" data-ac placeholder="e.g. Jita" autocomplete="off" required></span></label>
     <label>To <span class="ac"><input name="to" value="{{ to }}" data-ac placeholder="e.g. AC2E-3" autocomplete="off" required></span></label>
   {% endif %}
+  {% if tab == 'route' %}
+  <div class="leg-pick" role="radiogroup" aria-label="Leg">
+    <label title="Fitted as set on Pilots & ships (expanders for cargo)"><input type="radio" name="leg" value="loaded" {{ 'checked' if leg != 'empty' }}><span>📦 Loaded</span></label>
+    <label title="Every low slot an economizer, for flying out empty to pick up a load"><input type="radio" name="leg" value="empty" {{ 'checked' if leg == 'empty' }}><span>⛽ Empty · 3 economizers</span></label>
+  </div>
+  {% endif %}
   <label class="check"><input type="checkbox" name="cynos" value="1" {{ 'checked' if cynos }}> Only via my cyno points</label>
   <button class="primary" data-busy="{{ 'Planning…' if tab == 'route' else 'Updating…' }}"
           {{ 'disabled' if not status.systems or not ready }}>{{ 'Plan route' if tab == 'route' else 'Update' }}</button>
@@ -52,8 +58,12 @@
   {% if chosen %}
     <span class="pilot-stats small">
       <span><strong>{{ '%.2f' | format(chosen.range_ly) }}</strong> LY range</span>
-      <span><strong>{{ '{:,.0f}'.format(chosen.fuel_per_ly) }}</strong> {{ chosen.fuel_name }}/LY</span>
-      <span><strong>{{ '{:,.0f}'.format(chosen.cargo_m3) }}</strong> m³</span>
+      {% if tab == 'route' and leg == 'empty' %}
+        <span><strong>{{ '{:,.0f}'.format(chosen.empty_fuel_per_ly) }}</strong> {{ chosen.fuel_name }}/LY <span class="muted">empty, 3 econ</span></span>
+      {% else %}
+        <span><strong>{{ '{:,.0f}'.format(chosen.fuel_per_ly) }}</strong> {{ chosen.fuel_name }}/LY</span>
+        <span title="{% if chosen.carried_econ %}{{ '{:,.1f}'.format(chosen.cargo_m3) }} m³ hold − {{ chosen.carried_econ }} economizer{{ 's' if chosen.carried_econ != 1 }} carried for the empty trip back{% endif %}"><strong>{{ '{:,.0f}'.format(chosen.hold_m3) }}</strong> m³{% if chosen.carried_econ %} <span class="muted">after {{ chosen.carried_econ }} econ in hold</span>{% endif %}</span>
+      {% endif %}
       {% if chosen.max_collateral %}<span>≤ {{ chosen.max_collateral | isk }} collateral</span>{% endif %}
     </span>
   {% elif not profiles %}
@@ -68,11 +78,50 @@
   <div class="route-sum">
     <div class="kpi"><span class="kpi-v">{{ route.jumps }}</span><span class="kpi-l">jump{{ 's' if route.jumps != 1 }}</span></div>
     <div class="kpi"><span class="kpi-v">{{ '%.2f' | format(route.total_ly) }}</span><span class="kpi-l">light years</span></div>
-    <div class="kpi"><span class="kpi-v">{{ '{:,}'.format(route.fuel) }}</span><span class="kpi-l">{{ chosen.fuel_name }}</span>
-      {% if prices.get(chosen.fuel_type) %}<span class="kpi-s">{{ (route.fuel * prices[chosen.fuel_type]) | isk }} at average price</span>{% endif %}</div>
+    {% set price = prices.get(chosen.fuel_type, 0) %}
+    <div class="kpi"><span class="kpi-v">{{ '{:,}'.format(route.fuel) }}</span><span class="kpi-l">{{ chosen.fuel_name }} · {{ 'empty leg' if leg == 'empty' else 'loaded leg' }}</span>
+      {% if price %}<span class="kpi-s">{{ (route.fuel * price) | isk }} at average price</span>{% endif %}</div>
+    {% if other_fuel is not none %}
+    <div class="kpi"><span class="kpi-v">{{ '{:,}'.format(route.fuel + other_fuel) }}</span><span class="kpi-l">round trip</span>
+      <span class="kpi-s">{{ '{:,}'.format(other_fuel) }} {{ 'loaded' if leg == 'empty' else 'empty (3 econ)' }} the other way{% if price %} · {{ ((route.fuel + other_fuel) * price) | isk }}{% endif %}</span></div>
+    {% endif %}
     {% if route.landing %}<div class="kpi"><span class="kpi-v">{{ route.gate_jumps if route.gate_jumps is not none else '?' }}</span><span class="kpi-l">gates after landing</span>
       <span class="kpi-s">{{ route.dest.name }} is high-sec</span></div>{% endif %}
   </div>
+  {% if route_map %}{% set m = route_map %}
+  <div class="card route-map">
+    <svg viewBox="0 0 {{ m.w }} {{ m.h }}" role="img" aria-label="Map of the route">
+      <rect class="rm-bg" width="{{ m.w }}" height="{{ m.h }}"/>
+      {% for rg in m.rings %}<circle class="rm-ring" cx="{{ rg.x }}" cy="{{ rg.y }}" r="{{ rg.r }}"/>{% endfor %}
+      {% for lb in m.labels %}<text class="rm-region" x="{{ lb.x }}" y="{{ lb.y }}">{{ lb.name }}</text>{% endfor %}
+      {% for d in m.dots %}<circle class="rm-dot {{ d.sec }}" cx="{{ d.x }}" cy="{{ d.y }}" r="1.6"><title>{{ d.name }}</title></circle>{% endfor %}
+      {% if m.gate %}<line class="rm-gate" x1="{{ m.gate.x1 }}" y1="{{ m.gate.y1 }}" x2="{{ m.gate.x2 }}" y2="{{ m.gate.y2 }}"/>{% endif %}
+      {% for lg in m.legs %}
+        <path class="rm-jump" d="{{ lg.d }}" marker-end="url(#rm-arrow)"/>
+        <text class="rm-ly" x="{{ lg.lx }}" y="{{ lg.ly_y }}">{{ '%.1f' | format(lg.ly) }} LY</text>
+      {% endfor %}
+      {% for n in m.nodes %}
+        <g class="rm-node {{ n.role }}">
+          <circle cx="{{ n.x }}" cy="{{ n.y }}" r="{{ 7 if n.role in ('start', 'end') else 5 }}"/>
+          <text x="{{ n.x + 10 }}" y="{{ n.y - 9 }}">{{ n.name }} <tspan class="sec-t {{ n.sec_class }}">{{ n.sec }}</tspan></text>
+          <title>{{ n.name }} ({{ n.sec }})</title>
+        </g>
+      {% endfor %}
+      <defs><marker id="rm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="rm-arrowhead"/></marker></defs>
+      <g class="rm-scale" transform="translate(16 {{ m.h - 18 }})">
+        <line x1="0" y1="0" x2="{{ (m.scale_ly * m.px_per_ly) | round(1) }}" y2="0"/>
+        <text x="0" y="-6">{{ m.scale_ly }} LY</text></g>
+    </svg>
+    <div class="rm-legend small muted">
+      <span><i class="rm-key jump"></i> jump</span>
+      {% if m.gate %}<span><i class="rm-key gate"></i> gates (high-sec)</span>{% endif %}
+      <span><i class="rm-key ring"></i> {{ '%.1f' | format(chosen.range_ly) }} LY range from each stop</span>
+      <span><i class="rm-key dot hs"></i> high</span><span><i class="rm-key dot ls"></i> low</span><span><i class="rm-key dot ns"></i> null-sec</span>
+      <span class="spacer"></span><span>Top-down, north up. Range rings are flat; real distance also counts height.</span>
+    </div>
+  </div>
+  {% endif %}
   <table class="route-table">
     <thead><tr><th>#</th><th>From</th><th></th><th>To</th><th class="num">Distance</th><th class="num">Fuel</th></tr></thead>
     <tbody>
@@ -119,9 +168,9 @@
       {% for t in ln.trips %}
         <div class="trip">
           <div class="trip-head"><strong>Trip {{ loop.index }}</strong>
-            <span class="small">{{ t.contracts | length }} contract{{ 's' if t.contracts | length != 1 }} · {{ '{:,.0f}'.format(t.volume) }} / {{ '{:,.0f}'.format(chosen.cargo_m3) }} m³
+            <span class="small">{{ t.contracts | length }} contract{{ 's' if t.contracts | length != 1 }} · {{ '{:,.0f}'.format(t.volume) }} / {{ '{:,.0f}'.format(chosen.hold_m3) }} m³
               · {{ t.collateral | isk }} collateral · <strong>{{ t.reward | isk }}</strong></span>
-            <span class="meter trip-fill"><span style="width: {{ (t.volume / chosen.cargo_m3 * 100) | round(0) if chosen.cargo_m3 else 0 }}%"></span></span></div>
+            <span class="meter trip-fill"><span style="width: {{ (t.volume / chosen.hold_m3 * 100) | round(0) if chosen.hold_m3 else 0 }}%"></span></span></div>
           {% for c in t.contracts %}
             <a class="trip-line small" href="/contracts/{{ c.contract_id }}"><span>{{ c.customer.name if c.customer and c.customer.name else c.issuer_id }}
               <span class="muted">· {{ c.status | replace('_', ' ') }}</span></span>

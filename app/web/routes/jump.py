@@ -24,12 +24,14 @@ def _back(tab: str, **extra) -> RedirectResponse:
 
 @router.get("")
 async def planner(request: Request, tab: str = "route", pilot: int = 0, frm: str = "",
-                  to: str = "", cynos: int = 0, db: Session = Depends(get_db)):
+                  to: str = "", cynos: int = 0, leg: str = "loaded",
+                  db: Session = Depends(get_db)):
     status = svc.map_status(db)
     profs = svc.profiles(db)
     ready = [p for p in profs if p.ready]
     chosen = next((p for p in ready if p.character_id == pilot), ready[0] if ready else None)
-    ctx = {"tab": tab, "status": status, "profiles": profs, "ready": ready, "chosen": chosen,
+    leg = "empty" if leg == "empty" else "loaded"
+    ctx = {"tab": tab, "status": status, "leg": leg, "route_map": None, "other_fuel": None, "profiles": profs, "ready": ready, "chosen": chosen,
            "frm": frm, "to": to, "cynos": cynos, "route": None, "lanes": [], "prices": {},
            "cyno_points": [], "bonus": svc.bonuses(db), "bonus_labels": svc.BONUS_LABELS,
            "now": utcnow(), "haul": None, "haul_form": {},
@@ -54,8 +56,13 @@ async def planner(request: Request, tab: str = "route", pilot: int = 0, frm: str
             if not svc.can_cyno(b):
                 cands = svc.landing_candidates(db, b, svc.graph(db, bool(cynos)))
                 gates = await svc.gate_counts([c.system_id for c in cands], b.system_id)
-            ctx["route"] = svc.plan_route(db, a.system_id, b.system_id, chosen, bool(cynos), gates)
+            fitted = chosen.for_leg(leg)
+            r = svc.plan_route(db, a.system_id, b.system_id, fitted, bool(cynos), gates)
+            ctx["route"] = r
             ctx["frm"], ctx["to"] = a.name, b.name
+            if not r.error:
+                ctx["other_fuel"] = svc.other_leg_fuel(r, chosen, leg)
+                ctx["route_map"] = svc.route_map(db, r, chosen.range_ly)
     if tab == "lanes" and status["systems"]:
         ctx["lanes"] = svc.lanes(db, chosen, only_cynos=bool(cynos))
     if tab in ("route", "lanes") and chosen:

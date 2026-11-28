@@ -45,9 +45,9 @@ BONUS_DEFAULTS = {
     "fuel_per_jf": 0.10,          # Jump Freighters: -10% fuel per level
     "cargo_per_racial": 0.05,     # <Race> Freighter: +5% cargo per level
     "economizer_fuel": 0.10,      # each Jump Drive Economizer: -X% fuel
-    "ore_expander_cargo": 0.275,  # each ORE Expanded Cargohold: +X% cargo
-    "t2_expander_cargo": 0.275,   # each Expanded Cargohold II: +X% cargo
-    "economizer_volume": 10500,   # m3 an unfitted economizer takes in the hold
+    "ore_expander_cargo": 0.29,   # each ORE Expanded Cargohold: +X% cargo (1.29 in game data)
+    "t2_expander_cargo": 0.275,   # each Expanded Cargohold II: +X% cargo (1.275)
+    "economizer_volume": 3500,    # m3 ONE unfitted economizer takes in the hold (3 = 10,500)
 }
 BONUS_LABELS = {
     "range_per_jdc": "Jump Drive Calibration: range per level",
@@ -90,8 +90,18 @@ def _set_json(db: Session, key: str, value) -> None:
     db.add(row)
 
 
+# Values earlier versions shipped as defaults that were wrong. A saved value equal to one
+# of these (and not read from game data) is treated as never set, so the fix applies.
+_OLD_WRONG_DEFAULTS = {"ore_expander_cargo": 0.275, "economizer_volume": 10500}
+
+
 def bonuses(db: Session) -> dict[str, float]:
-    return {**BONUS_DEFAULTS, **_get_json(db, "jump:bonuses", {})}
+    saved = _get_json(db, "jump:bonuses", {})
+    from_game = _get_json(db, "jump:module_source", {})
+    for k, bad in _OLD_WRONG_DEFAULTS.items():
+        if k not in from_game and saved.get(k) == bad:
+            saved.pop(k)
+    return {**BONUS_DEFAULTS, **saved}
 
 
 def save_bonuses(db: Session, values: dict[str, float]) -> None:
@@ -218,6 +228,35 @@ class Profile:
         if not self.hull_fuel:
             return self.fuel_per_ly
         return self.hull_fuel * (1 - self.bonus["economizer_fuel"]) ** economizers
+
+    @property
+    def carried_econ(self) -> int:
+        """Economizers riding in the hold on a loaded leg, to refit for the empty trip
+        back: whatever low slots aren't economizers already (only with expanders fitted)."""
+        return max(0, LOW_SLOTS - self.economizers) if (self.ore or self.t2) else 0
+
+    @property
+    def hold_m3(self) -> float:
+        """Cargo you can actually load: the hold minus the economizers carried."""
+        vol = (self.bonus or BONUS_DEFAULTS).get("economizer_volume",
+                                                 BONUS_DEFAULTS["economizer_volume"])
+        return max(0.0, self.cargo_m3 - self.carried_econ * vol)
+
+    @property
+    def empty_fuel_per_ly(self) -> float:
+        """Isotopes/LY on an empty leg with every low slot an economizer."""
+        econ = (self.bonus or BONUS_DEFAULTS).get("economizer_fuel",
+                                                  BONUS_DEFAULTS["economizer_fuel"])
+        if "fuel_per_ly" in self.overridden or not self.hull_fuel:
+            return self.fuel_per_ly * (1 - econ) ** max(0, LOW_SLOTS - self.economizers)
+        return self.fuel_with(LOW_SLOTS)
+
+    def for_leg(self, leg: str) -> "Profile":
+        """This pilot as fitted for a loaded leg (its own fit) or an empty one (3 econ)."""
+        if leg != "empty":
+            return self
+        from dataclasses import replace
+        return replace(self, fuel_per_ly=self.empty_fuel_per_ly)
 
     def cargo_with(self, ore: int, t2: int = 0) -> float:
         if not self.hull_cargo:
@@ -466,6 +505,101 @@ def plan_route(db: Session, origin_id: int, dest_id: int, p: Profile,
     return r
 
 
+def other_leg_fuel(route: "Route", p: Profile, leg: str) -> int:
+    """Fuel for the same jumps fitted the other way (loaded <-> empty)."""
+    fpl = p.fuel_per_ly if leg == "empty" else p.empty_fuel_per_ly
+    return sum(fuel_for(lg.ly, fpl) for lg in route.legs)
+
+
+def route_map(db: Session, route: "Route", range_ly: float, width: int = 960,
+              height: int = 440, max_background: int = 1800) -> dict | None:
+    """A flat, top-down view of the route like the in-game map (north up): EVE's x runs
+    left-right and z runs up (Jita is above Amarr). Returns screen coordinates for the
+    route, nearby systems for context, region labels and each jump's range ring."""
+    if route is None or route.error or not route.legs:
+        return None
+    pts = [route.origin] + [lg.to for lg in route.legs]
+    if route.landing and route.dest not in pts:
+        pts.append(route.dest)
+    xs, zs = [s.x for s in pts], [s.z for s in pts]
+    span = max(max(xs) - min(xs), max(zs) - min(zs), 4 * LY_M)
+    pad = max(span * 0.12, 1.5 * LY_M)
+    x0, x1, z0, z1 = min(xs) - pad, max(xs) + pad, min(zs) - pad, max(zs) + pad
+    # Keep the view's shape: widen the narrow side to the canvas's aspect ratio.
+    want = width / height
+    if (x1 - x0) / (z1 - z0) < want:
+        extra = ((z1 - z0) * want - (x1 - x0)) / 2
+        x0, x1 = x0 - extra, x1 + extra
+    else:
+        extra = ((x1 - x0) / want - (z1 - z0)) / 2
+        z0, z1 = z0 - extra, z1 + extra
+    k = width / (x1 - x0)
+
+    def xy(s):
+        return round((s.x - x0) * k, 1), round((z1 - s.z) * k, 1)
+
+    bg = db.scalars(select(MapSystem).where(MapSystem.x.between(x0, x1),
+                                            MapSystem.z.between(z0, z1))
+                    .limit(max_background)).all()
+    on_route = {s.system_id for s in pts}
+    regions: dict[str, list] = {}
+    dots = []
+    for s in bg:
+        if s.system_id in on_route:
+            continue
+        px, py = xy(s)
+        dots.append({"x": px, "y": py, "sec": _sec_class(s.security), "name": s.name})
+        if s.region_name:
+            regions.setdefault(s.region_name, []).append((px, py))
+    labels = []
+    for n, ps in sorted(regions.items(), key=lambda kv: -len(kv[1])):
+        if len(ps) < 6:
+            continue
+        lx, ly_ = round(sum(p[0] for p in ps) / len(ps)), round(sum(p[1] for p in ps) / len(ps))
+        if all(abs(lx - o["x"]) > 170 or abs(ly_ - o["y"]) > 34 for o in labels):
+            labels.append({"name": n, "x": lx, "y": ly_})
+    nodes = []
+    for i, s in enumerate(pts):
+        px, py = xy(s)
+        role = ("start" if i == 0 else "end" if s is route.dest
+                else "landing" if s is route.landing else "mid")
+        nodes.append({"x": px, "y": py, "name": s.name, "sec": round(s.security, 1),
+                      "sec_class": _sec_class(s.security), "role": role})
+    legs = []
+    for lg in route.legs:
+        (ax, ay), (bx, by) = xy(lg.frm), xy(lg.to)
+        # Bow each jump a little to the left of its direction, like Dotlan's arcs.
+        mx, my = (ax + bx) / 2, (ay + by) / 2
+        dx, dy = bx - ax, by - ay
+        bend = 0.18
+        cx, cy = mx - dy * bend, my + dx * bend
+        # Distance label just outside the arc's bulge, away from the system names.
+        n = math.hypot(dx, dy) or 1
+        ox, oy = -dy / n * 13, dx / n * 13
+        legs.append({"d": f"M{ax},{ay} Q{cx:.1f},{cy:.1f} {bx},{by}", "ly": lg.ly,
+                     "lx": round((mx + cx) / 2 + ox, 1), "ly_y": round((my + cy) / 2 + oy + 4, 1)})
+    gate = None
+    if route.landing and route.dest is not route.landing:
+        (ax, ay), (bx, by) = xy(route.landing), xy(route.dest)
+        gate = {"x1": ax, "y1": ay, "x2": bx, "y2": by}
+    rings = [{"x": xy(lg.frm)[0], "y": xy(lg.frm)[1], "r": round(range_ly * LY_M * k, 1)}
+             for lg in route.legs]
+    return {"w": width, "h": height, "dots": dots, "labels": labels, "nodes": nodes,
+            "legs": legs, "gate": gate, "rings": rings,
+            "scale_ly": _nice_scale(width * 0.18 / (LY_M * k)), "px_per_ly": LY_M * k}
+
+
+def _sec_class(sec: float) -> str:
+    return "hs" if sec >= HIGHSEC else "ls" if sec > 0 else "ns"
+
+
+def _nice_scale(ly_wanted: float) -> int:
+    for n in (1, 2, 5, 10, 20, 50, 100):
+        if n >= ly_wanted * 0.6:
+            return n
+    return 100
+
+
 def landing_candidates(db: Session, dest: MapSystem, g: Graph, limit: int = 6) -> list[MapSystem]:
     """Cyno-able systems closest (by LY) to a high-sec destination."""
     near = sorted(((ly(s, dest), s) for s in g.sys.values()), key=lambda x: x[0])
@@ -589,7 +723,7 @@ def lanes(db: Session, p: Profile | None, statuses=("outstanding", "in_progress"
         lane = Lane(start, end, cs)
         if p is not None:
             lane.route = plan_route(db, sa, sb, p, only_cynos)
-            lane.trips, lane.unfit = pack(cs, p.cargo_m3 or float("inf"), p.max_collateral)
+            lane.trips, lane.unfit = pack(cs, p.hold_m3 or float("inf"), p.max_collateral)
         out.append(lane)
     out.sort(key=lambda ln: (-ln.per_jump, -ln.reward))
     return out

@@ -75,15 +75,38 @@ def test_profile_applies_skills_fit_and_overrides(db):
     assert (p.ship_name, p.economizers, p.ore, p.t2, p.fit_source) == ("Nomad", 1, 1, 1, "assets")
     assert p.range_ly == pytest.approx(10.0)                       # 5 × (1 + 0.2×5)
     assert p.fuel_per_ly == pytest.approx(10000 * 0.5 * 0.6 * 0.9)  # JFC5, JF4, 1 economizer
-    assert p.cargo_m3 == pytest.approx(100000 * 1.25 * 1.275 * 1.275)  # racial 5, ORE + T2
+    assert p.cargo_m3 == pytest.approx(100000 * 1.25 * 1.29 * 1.275)  # racial 5, ORE + T2
     assert p.fuel_name == "Hydrogen Isotopes"
     jp.fuel_override, jp.economizers, jp.expanders, jp.t2_expanders = 2500, 3, 0, 0
     p = jump.profile(db, jp, db.get(Character, 1), jump.bonuses(db))
     assert p.fuel_per_ly == 2500 and "fuel_per_ly" in p.overridden and p.fit_source == "manual"
     assert p.cargo_m3 == pytest.approx(100000 * 1.25)
     # Leg-specific numbers for the packing ledger: loaded with 3 ORE, empty with 3 economizers.
-    assert p.cargo_with(3) == pytest.approx(100000 * 1.25 * 1.275 ** 3)
+    assert p.cargo_with(3) == pytest.approx(100000 * 1.25 * 1.29 ** 3)
     assert p.fuel_with(3) == pytest.approx(10000 * 0.5 * 0.6 * 0.9 ** 3)
+
+
+def test_nomad_with_three_ore_expanders_matches_the_game():
+    """In game: Nomad, Minmatar Freighter V, 3x ORE Expanded Cargohold = 354,203.7 m3;
+    three economizers carried for the trip back take 3 x 3,500 m3 of it."""
+    from app.services.jump import BONUS_DEFAULTS, Profile
+    p = Profile(1, "JF", ship_name="Nomad", hull_cargo=132_000 * 1.25, hull_fuel=1000,
+                range_ly=10, fuel_per_ly=1000, ore=3, bonus=dict(BONUS_DEFAULTS))
+    p.cargo_m3 = p.cargo_with(3)
+    assert p.cargo_m3 == pytest.approx(354_203.7, abs=0.1)
+    assert p.carried_econ == 3 and p.hold_m3 == pytest.approx(343_703.7, abs=0.1)
+    assert p.empty_fuel_per_ly == pytest.approx(1000 * 0.9 ** 3)
+    assert p.for_leg("empty").fuel_per_ly == pytest.approx(729) and p.for_leg("loaded") is p
+
+
+def test_old_wrong_defaults_are_replaced_unless_from_game_data(db):
+    from app.services import jump
+    jump.save_bonuses(db, {"ore_expander_cargo": 0.275, "economizer_volume": 10500,
+                           "economizer_fuel": 0.10})
+    b = jump.bonuses(db)
+    assert b["ore_expander_cargo"] == 0.29 and b["economizer_volume"] == 3500
+    jump._set_json(db, "jump:module_source", {"economizer_volume": "10,500 m³"})
+    assert jump.bonuses(db)["economizer_volume"] == 10500     # game data wins
 
 
 # ------------------------------------------------------------------ routing
@@ -230,6 +253,33 @@ def test_route_page_shows_legs_fuel_and_cost(client):
     assert 'data-ac' in html                              # autocomplete on From / To
     hits = client.get("/jump/systems?q=ac2e").json()
     assert hits[0]["name"] == "AC2E-3" and hits[0]["region"] == "Fountain"
+
+
+def test_empty_leg_uses_three_economizers_and_route_has_a_map(client):
+    import re
+    loaded = client.get("/jump?tab=route&frm=jita&to=ac2e-3").text
+    empty = client.get("/jump?tab=route&frm=jita&to=ac2e-3&leg=empty").text
+    fuel = lambda html: int(re.search(r'kpi-v">([\d,]+)</span><span class="kpi-l">Hydrogen',
+                                       html).group(1).replace(",", ""))
+    assert "loaded leg" in loaded and "empty leg" in empty
+    assert fuel(empty) < fuel(loaded) and "round trip" in empty
+    # Round trip = this leg + the other: the same total either way.
+    rt = lambda html: re.search(r'kpi-v">([\d,]+)</span><span class="kpi-l">round trip', html).group(1)
+    assert rt(empty) == rt(loaded)
+    # The flat map: one arc per jump, both ends labelled, range rings.
+    assert loaded.count('class="rm-jump"') == 2 and "rm-ring" in loaded
+    assert 'rm-node start' in loaded and 'rm-node end' in loaded
+
+
+def test_route_map_puts_north_up(world):
+    """Jita (z > 0) must be drawn above Amarr-like systems with z < 0, and x left-right."""
+    from app.models import MapSystem
+    from app.services.jump import Leg, Route, route_map
+    a = MapSystem(system_id=1, name="North", security=-0.5, x=0.0, y=0.0, z=9.46e16)
+    b = MapSystem(system_id=2, name="South", security=-0.5, x=9.46e16, y=0.0, z=-9.46e16)
+    m = route_map(world, Route(a, b, legs=[Leg(a, b, 20.0, 100)]), 10.0)
+    north, south = m["nodes"]
+    assert north["y"] < south["y"] and north["x"] < south["x"]
 
 
 def test_pilots_and_cyno_pages(client, world):
