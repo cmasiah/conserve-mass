@@ -32,6 +32,15 @@ from app.utils import fmt_isk, fmt_m3
 log = logging.getLogger(__name__)
 
 GROUP_WINDOW = timedelta(hours=2)
+
+
+def is_haul(c: Contract, home_corp_id: int | None) -> bool:
+    """A haul request: an item exchange assigned to the corp where the corp pays nothing
+    (price 0) and the issuer isn't one of our own members (those are donations to the
+    corp hangar, not hauls). Paid hauls carry a reward instead of a price."""
+    if c.type != "item_exchange" or (c.price_isk or 0) > 0:
+        return False
+    return not (home_corp_id and c.issuer_corp_id == home_corp_id)
 HUBS_KEY = "bulk:hubs"
 DEFAULT_HUBS = ("AC2E-3", "C-N4OD")          # first = where the JFs are based
 OPEN_JOB = ("new", "accepted", "hauling")
@@ -91,12 +100,17 @@ def assign_jobs(db: Session, contracts: list[Contract]) -> list[tuple[BulkJob, b
 
 
 def update_status(job: BulkJob) -> None:
-    """new: nothing accepted yet · accepted: some or all goods in our hands. Delivered and
-    closed are set by you (Batch B watches the return contract)."""
+    """new: nothing accepted yet · accepted: some or all goods in our hands · closed: every
+    contract was withdrawn or expired before we took anything. Delivered is set by you
+    (Batch B watches the return contract)."""
     if job.status in ("delivered", "closed", "hauling"):
         return
-    if any(c.status in FINISHED_EX for c in job.contracts):
+    if any(c.status in FINISHED_EX for c in job.live):
         job.status = "accepted"
+    elif not job.live:
+        job.status = "closed"
+        job.notes = job.notes or "Closed automatically: every contract was deleted, " \
+                                 "cancelled or expired before it was accepted."
 
 
 # ------------------------------------------------------------------ destination
@@ -125,7 +139,7 @@ def pickups(db: Session, job: BulkJob) -> list[Pickup]:
     """The job's contracts by pickup system, with the straight-line distance to each hub."""
     hs = hub_systems(db)
     by_sys: dict[int | None, Pickup] = {}
-    for c in job.contracts:
+    for c in job.live:
         loc = c.start_location
         sid = loc.system_id if loc else None
         p = by_sys.get(sid)
@@ -226,8 +240,10 @@ async def after_sync(corp_id: int, token: str) -> None:
         for cid, rows in fetched.items():
             store_items(db, cid, rows)
         db.flush()
-        bulk = list(db.scalars(select(Contract).where(
+        every = list(db.scalars(select(Contract).where(
             Contract.corporation_id == corp_id, Contract.type == "item_exchange")))
+        bulk = [c for c in every if is_haul(c, corp_id)]
+        _drop_non_hauls(db, [c for c in every if not is_haul(c, corp_id)])
         price = prices.jita_buy(db, {it.type_id for c in bulk for it in c.items})
         for c in bulk:
             _value_contract(db, c, price)
@@ -244,12 +260,87 @@ async def after_sync(corp_id: int, token: str) -> None:
         db.commit()
 
 
+def _drop_non_hauls(db: Session, contracts: list[Contract]) -> None:
+    """Take contracts that aren't haul requests out of their jobs (earlier versions
+    grouped every item exchange); delete jobs left empty."""
+    emptied = {c.job_id for c in contracts if c.job_id}
+    for c in contracts:
+        c.job_id = None
+    db.flush()
+    for jid in emptied:
+        job = db.get(BulkJob, jid)
+        if job is not None:
+            db.refresh(job)
+            if not job.contracts:
+                db.delete(job)
+
+
+# ------------------------------------------------------------------ return contracts
+
+def _dt(v):
+    from datetime import datetime
+    return datetime.fromisoformat(v.replace("Z", "+00:00")) if v else None
+
+
+def match_returns(db: Session, corp_id: int, rows: list[dict]) -> int:
+    """Spot contracts the corp issued back to a bulk job's requester (an item exchange at
+    your price, or a courier). When they complete: the job is delivered and, for an item
+    exchange, its price is what you earned. Synchronous: runs inside the contract sync's
+    short write."""
+    ours = [r for r in rows if r.get("type") in ("item_exchange", "courier")
+            and r.get("issuer_corporation_id") == corp_id and r.get("for_corporation")
+            and r.get("assignee_id")]
+    if not ours:
+        return 0
+    jobs = db.scalars(select(BulkJob).where(BulkJob.status != "closed")).all()
+    by_contract = {j.return_contract_id: j for j in jobs if j.return_contract_id}
+    matched = 0
+    for r in sorted(ours, key=lambda r: r.get("date_issued") or ""):
+        job = by_contract.get(r["contract_id"])
+        if job is None:
+            issued = _dt(r.get("date_issued"))
+            cands = [j for j in jobs if j.return_contract_id is None and j.paid_at is None
+                     and r["assignee_id"] in {j.issuer_id, getattr(j.customer, "corporation_id", None)}
+                     and issued and issued >= j.first_issued_at]
+            if not cands:
+                continue
+            job = max(cands, key=lambda j: j.first_issued_at)
+            job.return_contract_id = r["contract_id"]
+            by_contract[r["contract_id"]] = job
+        matched += 1
+        job.return_type = r["type"]
+        job.return_status = r.get("status")
+        price = r.get("price") if r["type"] == "item_exchange" else None
+        job.return_price_isk = price or None
+        if r.get("status") in FINISHED_EX and job.paid_at is None:
+            done_at = _dt(r.get("date_completed")) or utcnow()
+            job.status = "delivered"
+            job.delivered_at = job.delivered_at or done_at
+            if price:
+                job.agreed_reward_isk = price
+                job.paid_at = done_at
+            _notify_done(db, job, price)
+    return matched
+
+
+def _notify_done(db: Session, job: BulkJob, price: float | None) -> None:
+    cust = db.get(Customer, job.issuer_id)
+    if cust and cust.silenced:
+        return
+    who = cust.name if cust and cust.name else str(job.issuer_id)
+    enqueue(db, ref=f"bulkdone:{job.id}", kind="bulk_job",
+            title="💰 Bulk job paid" if price else "✅ Bulk job delivered",
+            body=f"{who} accepted the return contract." + (
+                f"\n**Earned:** {fmt_isk(price)} ISK" if price else ""),
+            url=f"{get_settings().base_url}/contracts/bulk/{job.id}", subject_id=job.issuer_id)
+
+
 # ------------------------------------------------------------------ notifications
 
 def job_line(db: Session, job: BulkJob) -> str:
     who = job.customer.name if job.customer and job.customer.name else str(job.issuer_id)
-    n = len(job.contracts)
-    ps = {c.start_location.system_name for c in job.contracts
+    n = len(job.live)
+    ps = {c.start_location.system_name for c in job.live
           if c.start_location and c.start_location.system_name}
     pay = (f"💰 {fmt_isk(job.upfront_isk)} ISK upfront" if job.price_mode == "upfront"
            else "🧾 price after")
@@ -276,10 +367,11 @@ def _notify_job(db: Session, job: BulkJob, is_new: bool) -> None:
 
 def queue_expiry_alerts(db: Session) -> None:
     """One heads-up per job when unaccepted contracts expire within the warning window."""
-    horizon = utcnow() + timedelta(hours=get_settings().expiry_warning_hours)
+    from app.services.prefs import expiry_hours
+    horizon = utcnow() + timedelta(hours=expiry_hours(db))
     now = utcnow()
     for job in db.scalars(select(BulkJob).where(BulkJob.status.in_(("new", "accepted")))):
-        waiting = [c for c in job.contracts if c.status == "outstanding" and c.date_expired]
+        waiting = [c for c in job.waiting if c.date_expired]
         soon = [c for c in waiting if now < c.date_expired <= horizon]
         if not soon:
             continue

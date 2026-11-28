@@ -154,11 +154,30 @@ def isk_by_week(db: Session, now: datetime, weeks: int = 8) -> list[dict]:
         if wk in buckets:
             buckets[wk]["count"] += 1
             buckets[wk]["isk"] += reward or 0
+    # Bulk jobs count when paid (or delivered, for upfront ones).
+    for done, isk in bulk_earnings(db, starts[0]):
+        wk = (done - timedelta(days=done.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        if wk in buckets:
+            buckets[wk]["count"] += 1
+            buckets[wk]["isk"] += isk
     rows = [buckets[d] for d in starts]
     peak = max((r["isk"] for r in rows), default=0) or 1
     for r in rows:
         r["pct"] = round(100 * r["isk"] / peak)
     return rows
+
+
+def bulk_earnings(db: Session, since: datetime) -> list[tuple[datetime, float]]:
+    """(when, ISK) for bulk jobs earned since a date: paid jobs at their payment, upfront
+    jobs when delivered."""
+    from app.models import BulkJob
+    out = []
+    for j in db.scalars(select(BulkJob).where(BulkJob.status == "delivered")):
+        when = j.paid_at or j.delivered_at
+        if when and when >= since and j.earned_isk:
+            out.append((when, j.earned_isk))
+    return out
 
 
 def top_customers(db: Session, now: datetime, limit: int = 5) -> list[dict]:

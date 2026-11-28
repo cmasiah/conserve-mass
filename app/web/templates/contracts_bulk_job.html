@@ -15,10 +15,10 @@
   <span class="small muted">from <a href="/customers/{{ job.issuer_id }}">{{ who }}</a> · {{ job.first_issued_at.strftime('%Y-%m-%d %H:%M') }} EVE</span>
 </div>
 
-{% set taken = job.contracts | selectattr('status', 'in', FINISHED_EX) | list | length %}
+{% set taken = job.live | selectattr('status', 'in', FINISHED_EX) | list | length %}
 <div class="route-sum bulk-kpis">
-  <div class="kpi"><span class="kpi-v">{{ taken }} / {{ job.contracts | length }}</span><span class="kpi-l">contracts accepted</span>
-    <span class="kpi-s">{{ pickups | length }} pickup system{{ 's' if pickups | length != 1 }}</span></div>
+  <div class="kpi"><span class="kpi-v">{{ taken }} / {{ job.live | length }}</span><span class="kpi-l">contracts accepted</span>
+    <span class="kpi-s">{{ pickups | length }} pickup system{{ 's' if pickups | length != 1 }}{% if job.withdrawn %} · {{ job.withdrawn | length }} deleted/expired, not counted{% endif %}</span></div>
   <div class="kpi"><span class="kpi-v">{{ job.m3 | m3 }}</span><span class="kpi-l">to haul</span></div>
   <div class="kpi"><span class="kpi-v">{{ job.value_isk | isk if job.value_isk else '—' }}</span><span class="kpi-l">goods value · Jita buy</span>
     <span class="kpi-s">{% if price_source == 'esi' %}<span class="warn-text">estimate (CCP average; Jita prices unavailable)</span>{% elif job.priced_at %}priced {{ job.priced_at | delta(now) }}{% else %}pricing…{% endif %}</span></div>
@@ -34,7 +34,8 @@
     <h3>Pickups</h3>
     <table class="compact">
       <thead><tr><th>System</th><th class="num">Contracts</th><th class="num">m³</th><th class="num">Value</th>
-        {% for h in hubs %}<th class="num" title="Straight-line distance">→ {{ h.name }}</th>{% endfor %}</tr></thead>
+        {% for h in hubs %}<th class="num" title="Straight-line distance">→ {{ h.name }}</th>{% endfor %}
+        <th class="num" title="The job's goods still at the pickup structures, from the corp's synced assets">Still there</th></tr></thead>
       <tbody>
       {% for p in pickups %}
         <tr><td><strong>{{ p.name }}</strong>{% if p.system %} <span class="sec {{ 'hs' if p.system.security >= 0.45 else ('ls' if p.system.security > 0 else 'ns') }}">{{ '%.1f' | format(p.system.security) }}</span>
@@ -43,6 +44,10 @@
           <td class="num">{{ p.m3 | m3 }}</td>
           <td class="num">{{ p.value | isk if p.value else '—' }}</td>
           {% for h in hubs %}<td class="num {{ 'nearest' if p.nearest == h.name }}">{{ '%.3f' | format(p.hub_ly[h.name]) ~ ' LY' if h.name in p.hub_ly else '—' }}</td>{% endfor %}
+          {% set st = still_there.get(p.system.system_id) if p.system else none %}
+          <td class="num small">{% if st and st.cleared %}<span class="ok-text">✓ picked up</span>
+            {% elif st and st.qty %}{{ st.m3 | m3 if st.m3 else '{:,}'.format(st.qty) ~ ' items' }}
+            {% else %}<span class="muted">—</span>{% endif %}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -73,6 +78,113 @@
   </section>
 </div>
 
+{% macro jumpline(lg) -%}
+  <strong>Jump {{ lg.from }} → {{ lg.to }}</strong>
+  <span class="pill small {{ 'fit-empty' if lg.fit == 'empty' else 'fit-loaded' }}">{{ '⛽ empty · 3 economizers' if lg.fit == 'empty' else '📦 loaded · ORE expanders' }}</span>
+  <span class="small muted">{{ lg.jumps }} jump{{ 's' if lg.jumps != 1 }}{% if lg.mids %} via {{ lg.mids | join(' → ') }}{% endif %} · {{ '%.3f' | format(lg.ly) }} LY · {{ '{:,}'.format(lg.fuel) }} isotopes</span>
+{%- endmacro %}
+<section class="card plan-card" id="plan">
+  <div class="sec-head"><h3>Trip plan</h3>
+    {% if plan %}<span class="small muted">planned {{ plan.planned_at[:16].replace('T', ' ') }} EVE · from {{ plan.base }} to {{ plan.dest }}</span>{% endif %}
+    <span class="spacer"></span>
+    <form method="post" action="/contracts/bulk/{{ job.id }}/plan" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="{{ 'primary' if not plan or stale }}" data-busy="Planning…">{{ 'Re-plan' if plan else 'Plan trips' }}</button></form>
+  </div>
+  {% if stale %}<div class="flash warn small">The job changed since this plan (contracts, destination or pilots). <strong>Re-plan</strong> to update it; trips you've started are kept.</div>{% endif %}
+  {% if not plan %}
+    <p class="small muted">Plans trips for every ready jump freighter from {{ hubs[0].name if hubs else 'your home hub' }}: out empty with 3 economizers, load at one or more pickups (refit ORE expanders at the first dock), jump loaded to {{ dest.name if dest else 'the destination' }}, refit and fly home empty. Saved here so you can tick steps off as you go.</p>
+  {% else %}
+    {% set t = plan.totals %}
+    <div class="plan-kpis">
+      <span><strong>{{ t.trips }}</strong> trip{{ 's' if t.trips != 1 }} · <strong>{{ t.waves }}</strong> wave{{ 's' if t.waves != 1 }}</span>
+      <span><strong>{{ t.jumps }}</strong> jumps</span>
+      {% for name, n, isk in cost.fuel %}<span><strong>{{ '{:,}'.format(n) }}</strong> {{ name }}{% if isk %} · {{ isk | isk }}{% endif %}</span>{% endfor %}
+      <span title="The most valuable single load">peak hold value <strong>{{ t.peak_value | isk }}</strong></span>
+      <span class="plan-progress"><span class="meter"><span style="width: {{ progress }}%"></span></span> {{ done | length }} / {{ total_steps }} steps</span>
+    </div>
+    {% if plan.unreachable %}<p class="small warn-text">Can't reach: {{ plan.unreachable | join(', ') }} (jump range or no star map).</p>{% endif %}
+    {% if plan.too_big %}<p class="small warn-text">Too big for any hold: {{ plan.too_big | join(', ') }}.</p>{% endif %}
+    <div class="trips">
+    {% for x in trips %}{% set tr = x.t %}
+      <details class="trip {{ 'trip-done' if x.done == x.steps | length }}" {{ 'open' if x.done < x.steps | length and loop.index <= 3 }}>
+        <summary>
+          <span class="trip-n">{{ tr.id[1:] }}</span>
+          <span class="trip-main"><strong>Wave {{ tr.wave }} · {{ tr.pilot }}</strong> <span class="muted small">{{ tr.ship }}</span>
+            <span class="small muted">{{ tr.stops | map(attribute='system') | join(' + ') }} → {{ plan.dest }}</span></span>
+          <span class="trip-fill" title="{{ '{:,.0f}'.format(tr.m3) }} of {{ '{:,.0f}'.format(tr.capacity) }} m³"><span class="meter"><span style="width: {{ (100 * tr.m3 / tr.capacity) | round(0) if tr.capacity else 0 }}%"></span></span>{{ tr.m3 | m3 }}</span>
+          <span class="small trip-meta">{{ tr.jumps }} j · {{ '{:,}'.format(tr.fuel) }} iso · <span title="Value of the goods in this hold">{{ tr.value | isk }} in hold</span></span>
+          <span class="small trip-count">{{ x.done }}/{{ x.steps | length }}</span>
+        </summary>
+        <ol class="steps">
+        {% for st in x.steps %}
+          <li class="step {{ 'done' if st.id in done }}">
+            <form method="post" action="/contracts/bulk/{{ job.id }}/step" class="step-form">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="step" value="{{ st.id }}">
+              <input type="hidden" name="done" value="{{ 0 if st.id in done else 1 }}">
+              <button class="step-box" aria-pressed="{{ 'true' if st.id in done else 'false' }}" title="{{ 'Mark not done' if st.id in done else 'Mark done' }}">{{ '✓' if st.id in done else '' }}</button>
+            </form>
+            <div class="step-body">
+              {% if st.kind == 'jump' %}{{ jumpline(st.leg) }}
+              {% elif st.kind == 'load' %}
+                <strong>Load at {{ st.stop.location }}</strong>{% if st.refit %} <span class="small muted">· refit ORE expanders first (economizers into the hold)</span>{% endif %}
+                <span class="small muted">{{ st.stop.m3 | m3 }} · {{ st.stop.value | isk }}</span>
+                <div class="load-items">{{ copy_button(x.clip[st.id], 'Copy load') }}
+                  {% for i in st.stop['items'] %}<span>{{ i.name }} <strong>{{ '{:,}'.format(i.qty) }}</strong></span>{% endfor %}</div>
+              {% else %}
+                <strong>Unload at {{ st.at }}</strong>{% if st.refit %} <span class="small muted">· refit economizers for the trip home</span>{% endif %}
+              {% endif %}
+            </div>
+          </li>
+        {% endfor %}
+        </ol>
+      </details>
+    {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<section class="card pricing-card" id="pricing">
+  <div class="sec-head"><h3>Costs &amp; pricing</h3><span class="spacer"></span>
+    <span class="small muted">{{ '💰 paid upfront: ' ~ (job.upfront_isk | isk) if job.price_mode == 'upfront' else '🧾 you set the reward' }}</span></div>
+  {% if not cost %}<p class="small muted">Plan the trips first: costs come from the plan's jumps and fuel.</p>
+  {% else %}
+  <div class="pricing-grid">
+    <table class="compact cost-table">
+      <tr><td>Fuel at Jita buy{% if not cost.fuel_priced %} <span class="warn-text small">(some isotope prices missing)</span>{% endif %}</td><td class="num">{{ cost.fuel_isk | isk }}</td></tr>
+      <tr><td>Your time: {{ cost.isk_per_jump | isk }} × {{ cost.jumps }} jumps</td><td class="num">{{ cost.time_isk | isk }}</td></tr>
+      <tr><td>Risk: {{ cost.risk_pct }}% of {{ job.value_isk | isk }} cargo</td><td class="num">{{ cost.risk_isk | isk }}</td></tr>
+      <tr class="cost-total"><td>Operating cost</td><td class="num">{{ cost.total | isk }}</td></tr>
+      {% if job.price_mode == 'upfront' %}<tr><td>Profit at the upfront reward</td><td class="num {{ 'ok-text' if job.upfront_isk > cost.total else 'bad-text' }}">{{ (job.upfront_isk - cost.total) | isk }}</td></tr>{% endif %}
+    </table>
+    <form method="post" action="/contracts/bulk/{{ job.id }}/pricing" class="pricing-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>ISK per jump <span class="small muted">your time</span><input name="isk_per_jump" value="{{ cost.isk_per_jump | isk if cost.isk_per_jump else '' }}" placeholder="e.g. 5m"></label>
+      <label>Risk <span class="small muted">% of cargo value</span><input name="risk_pct" value="{{ cost.risk_pct if cost.risk_pct else '' }}" placeholder="e.g. 1"></label>
+      <button class="small">Save defaults</button>
+      <span class="small muted">Apply to every job.</span>
+    </form>
+  </div>
+  <table class="compact ladder">
+    <thead><tr><th>Markup on cost</th><th class="num">Reward</th><th class="num">ISK / jump</th><th class="num">ISK / m³</th><th></th></tr></thead>
+    <tbody>
+    {% for r in cost.ladder %}
+      <tr class="{{ 'chosen' if job.agreed_reward_isk and (job.agreed_reward_isk - r.reward) | abs < 1e6 }}"><td>+{{ r.pct }}%</td><td class="num"><strong>{{ r.reward | isk }}</strong></td>
+        <td class="num">{{ r.per_jump | isk }}</td><td class="num">{{ '{:,.0f}'.format(r.per_m3) }}</td>
+        <td>{% if job.price_mode == 'after' %}<form method="post" action="/contracts/bulk/{{ job.id }}/pricing" class="inline">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="use" value="{{ r.reward | round(0) | int }}">
+          <button class="small">Use this</button></form>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if job.return_contract_id %}
+    <p class="small">Return contract <a href="#">#{{ job.return_contract_id }}</a> ({{ job.return_type | replace('_', ' ') }}): <strong>{{ job.return_status }}</strong>{% if job.return_price_isk %} at {{ job.return_price_isk | isk }}{% endif %}{% if job.paid_at %} · <span class="ok-text">paid {{ job.paid_at | delta(now) }}</span>{% endif %}</p>
+  {% elif job.status not in ('new',) %}
+    <p class="small muted">Contract the goods back to {{ who }} (an item exchange at your price, or a courier); the app spots it, marks the job delivered when it completes, and records the ISK.</p>
+  {% endif %}
+  {% endif %}
+</section>
+
 <section class="card">
   <div class="sec-head"><h3>Everything in this job</h3><span class="spacer"></span>{{ copy_button(clip, 'Copy all items') }}</div>
   {% if items %}
@@ -88,11 +200,11 @@
   <table class="compact bulk-contracts">
     <thead><tr><th>Contract</th><th>Pickup</th><th>Status</th><th class="num">m³</th><th class="num">Value</th><th class="num">Reward</th><th>Timing</th><th></th></tr></thead>
     <tbody>
-    {% for c in job.contracts %}
-      <tr>
+    {% for c in job.contracts %}{% set gone = c in job.withdrawn %}
+      <tr class="{{ 'gone' if gone }}">
         <td><a href="/contracts/{{ c.contract_id }}">#{{ c.contract_id }}</a>{% if c.title %}<div class="small muted">{{ c.title }}</div>{% endif %}</td>
         <td>{{ place(c.start_location) }}</td>
-        <td><span class="pill small {{ 'ok' if c.status in FINISHED_EX else ('warn' if c.status == 'outstanding' else 'bad') }}">{{ 'accepted' if c.status in FINISHED_EX else c.status }}</span></td>
+        <td><span class="pill small {{ 'ok' if c.status in FINISHED_EX else ('muted' if gone else 'warn') }}">{{ 'accepted' if c.status in FINISHED_EX else ('expired' if gone and c.status == 'outstanding' else c.status) }}</span></td>
         <td class="num">{{ c.volume_m3 | m3 }}</td>
         <td class="num">{{ c.value_isk | isk if c.value_isk else '—' }}</td>
         <td class="num">{{ c.reward_isk | isk if c.reward_isk else '0' }}</td>
@@ -109,4 +221,5 @@
   </table>
 </section>
 {{ clip_script() }}
+<script src="/static/bulk.js?v={{ ASSET_V }}"></script>
 {% endblock %}

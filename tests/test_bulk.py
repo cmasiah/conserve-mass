@@ -208,3 +208,58 @@ def test_exposure_and_hauled_across_couriers_and_bulk(client, seeded):
     assert "Bulk jobs" in cust and "Collateral hauled" in cust
     lst = client.get("/customers").text            # bulk-only customer is listed
     assert f"/customers/{ISSUER}" in lst and "In hand now" in lst
+
+
+def test_only_real_haul_requests_become_jobs_and_dead_jobs_close(db, monkeypatch):
+    """Earlier every item exchange became a job: deleted/expired ones, members' donations
+    to the corp, and buyback-style contracts the corp pays for. Now only 0-ISK requests
+    from outside the corp count, and jobs whose contracts all went away close."""
+    from app.esi import client as esi
+    from app.models import BulkJob, Contract
+    from app.services import bulk
+    now = datetime.now(timezone.utc)
+    _store(db, [bulk_raw(1, 5001, 30),                                     # real request
+                bulk_raw(2, 5001, 30, issuer=90000901, issuer_corporation_id=CORP),  # member
+                bulk_raw(3, 5001, 30, issuer=90000902, price=5e8),          # corp buys
+                bulk_raw(4, 5001, 30, issuer=90000903, status="deleted"),   # withdrawn
+                bulk_raw(5, 5001, 30, issuer=90000904,                       # expired
+                         date_expired=_iso(now - timedelta(hours=1)))])
+
+    async def get(path, token=None, params=None):
+        return []
+    monkeypatch.setattr(esi, "get", get)
+    # Simulate an older version having grouped everything into jobs.
+    bulk.assign_jobs(db, list(db.scalars(select(Contract))))
+    db.commit()
+    asyncio.run(bulk.after_sync(CORP, "tok"))
+    db.expire_all()
+    jobs = {j.issuer_id: j for j in db.scalars(select(BulkJob))}
+    assert set(jobs) == {ISSUER, 90000903, 90000904}       # member + buyback dropped
+    assert jobs[ISSUER].status == "new"
+    assert jobs[90000903].status == "closed" and jobs[90000904].status == "closed"
+    assert jobs[90000904].live == [] and len(jobs[90000904].withdrawn) == 1
+
+
+def test_dashboard_counts_bulk_work_and_new_sticker(client, seeded):
+    from app.models import Contract
+    from app.services import bulk
+    _map(seeded)
+    _store(seeded, [bulk_raw(1, 5001, 30), bulk_raw(2, 5002, 20)])
+    bulk.assign_jobs(seeded, list(seeded.scalars(select(Contract))))
+    seeded.commit()
+    dash = client.get("/hauling").text
+    assert "2 bulk</a>" in dash and "<h2>Bulk jobs" in dash and "1 new" in dash
+    assert "open courier contracts hidden" not in dash      # not a blocked-issuer count
+    assert "exp-y" in dash and "today" in dash and "info-dot" in dash
+    tabs = client.get("/contracts").text
+    assert "has-new" in tabs and "new-sticker" in tabs
+
+
+def test_warning_window_is_set_on_the_notifications_page(client, seeded):
+    from app.services import prefs
+    page = client.get("/settings/notifications").text
+    assert "EXPIRY_WARNING_HOURS" not in page and 'name="expiry_hours"' in page
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    client.post("/settings/notifications", data={"csrf": csrf, "expiry_hours": "36"})
+    prefs.invalidate()
+    assert prefs.expiry_hours(seeded) == 36

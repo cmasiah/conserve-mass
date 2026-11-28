@@ -143,6 +143,23 @@ class ContractItem(Base):
     contract: Mapped[Contract] = relationship(back_populates="items")
 
 
+class BulkPlan(Base):
+    """A saved trip plan for a bulk job: JSON trips and steps, and which steps are done.
+    `fingerprint` is what it was planned from (contracts, destination, pilots); when the
+    job no longer matches, the plan is shown as out of date."""
+    __tablename__ = "bulk_plans"
+
+    job_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("bulk_jobs.id", ondelete="CASCADE"), primary_key=True)
+    data: Mapped[str] = mapped_column(Text)
+    done: Mapped[str] = mapped_column(Text, default="[]")
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+    job: Mapped["BulkJob"] = relationship(back_populates="plan")
+
+
 # Bulk job lifecycle (ours; ESI's item-exchange status flips to "finished" the moment the
 # corp accepts, which here means "in our hands", not delivered).
 JOB_STATUSES = ["new", "accepted", "hauling", "delivered", "closed"]
@@ -172,14 +189,37 @@ class BulkJob(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # The contract the corp issued back to the requester (spotted automatically).
+    return_contract_id: Mapped[int | None] = mapped_column(BigInteger)
+    return_type: Mapped[str | None] = mapped_column(String(16))
+    return_status: Mapped[str | None] = mapped_column(String(24))
+    return_price_isk: Mapped[float | None] = mapped_column(Float)
+    paid_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     customer: Mapped[Customer] = relationship()
+    plan: Mapped["BulkPlan | None"] = relationship(back_populates="job", uselist=False,
+                                                   cascade="all, delete-orphan")
     contracts: Mapped[list[Contract]] = relationship(back_populates="job",
                                                      order_by="Contract.date_issued")
 
     @property
+    def live(self) -> list[Contract]:
+        """Contracts still part of the job: not deleted, cancelled, rejected or expired
+        unaccepted. Totals and value count these only."""
+        return [c for c in self.contracts if not is_withdrawn(c)]
+
+    @property
+    def withdrawn(self) -> list[Contract]:
+        return [c for c in self.contracts if is_withdrawn(c)]
+
+    @property
+    def waiting(self) -> list[Contract]:
+        """Not accepted yet and still acceptable."""
+        return [c for c in self.live if c.status == "outstanding"]
+
+    @property
     def upfront_isk(self) -> float:
-        return sum(c.reward_isk or 0 for c in self.contracts)
+        return sum(c.reward_isk or 0 for c in self.live)
 
     @property
     def price_mode(self) -> str:
@@ -188,11 +228,11 @@ class BulkJob(Base):
 
     @property
     def m3(self) -> float:
-        return sum(c.volume_m3 or 0 for c in self.contracts)
+        return sum(c.volume_m3 or 0 for c in self.live)
 
     @property
     def value_isk(self) -> float:
-        return sum(c.value_isk or 0 for c in self.contracts)
+        return sum(c.value_isk or 0 for c in self.live)
 
     @property
     def exposure_isk(self) -> float:
@@ -200,7 +240,7 @@ class BulkJob(Base):
         value while they're in your hands (accepted, not yet delivered)."""
         if self.status in ("delivered", "closed"):
             return 0.0
-        held = sum(c.value_isk or 0 for c in self.contracts if c.status in FINISHED_EX)
+        held = sum(c.value_isk or 0 for c in self.live if c.status in FINISHED_EX)
         if self.return_collateral_isk and held:
             return self.return_collateral_isk
         return held
@@ -212,3 +252,12 @@ class BulkJob(Base):
 
 # An item exchange the corp accepted shows as finished: the goods are ours to haul.
 FINISHED_EX = ("finished", "finished_contractor", "finished_issuer")
+WITHDRAWN_EX = ("deleted", "cancelled", "rejected", "reversed", "failed")
+
+
+def is_withdrawn(c: Contract) -> bool:
+    """Gone without us taking the goods: withdrawn by the issuer, or expired unaccepted
+    (ESI keeps showing those as 'outstanding' past their expiry date)."""
+    if c.status in WITHDRAWN_EX:
+        return True
+    return bool(c.status == "outstanding" and c.date_expired and c.date_expired <= utcnow())

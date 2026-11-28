@@ -32,7 +32,9 @@
 {% endfor %}
 
 <div class="grid">
-  <div class="card stat"><div class="label">Awaiting acceptance</div><div class="value">{{ outstanding|length }}</div></div>
+  <div class="card stat" title="Couriers and bulk-job contracts nobody has accepted yet"><div class="label">Awaiting acceptance</div>
+    <div class="value">{{ outstanding | length + bulk_waiting }}</div>
+    <div class="small muted">{{ outstanding | length }} courier{{ 's' if outstanding | length != 1 }}{% if bulk_waiting %} · <a href="/contracts/bulk">{{ bulk_waiting }} bulk</a>{% endif %}</div></div>
   <div class="card stat"><div class="label">In transit</div><div class="value">{{ in_progress|length }}</div></div>
   <div class="card stat" title="Collateral of accepted couriers plus the value of bulk-job goods in your hands"><div class="label">Exposure now</div>
     <div class="value">{{ exposure.now | isk }}</div>
@@ -45,14 +47,26 @@
     <div class="small muted">this month · {{ exposure.hauled_all | isk }} all time</div></div>
 </div>
 
+{% set peak = exposure.daily | map(attribute='isk') | max if exposure.daily else 0 %}
 <div class="card exposure-card">
   <div class="exp-head"><strong>Exposure, last 30 days</strong>
-    <span class="small muted">what you were responsible for at the end of each day</span>
+    <span class="tip info-tip" tabindex="0"><span class="info-dot" aria-label="What this shows">i</span>
+      <span class="tip-body tip-text"><span class="tip-head">Exposure</span>
+        <span class="tip-para">The ISK you were responsible for at the end of each day: the collateral of couriers you'd accepted but not delivered, plus the value of bulk-job goods in your hands (or the return collateral you set).</span>
+        <span class="tip-para">It's what you'd owe or lose if everything in transit were lost. Taller bars are riskier days. Hover a bar for its date and amount.</span></span></span>
     <span class="spacer"></span>
     {% if open_jobs %}<a class="small" href="/contracts/bulk">{{ open_jobs }} open bulk job{{ 's' if open_jobs != 1 }} →</a>{% endif %}</div>
-  <div class="exp-bars" role="img" aria-label="Exposure per day, last 30 days">
-    {% for d in exposure.daily %}<span class="exp-bar" style="height: {{ [d.pct, 1] | max }}%" title="{{ d.day.strftime('%b %d') }}: {{ d.isk | isk }}"></span>{% endfor %}
+  <div class="exp-chart">
+    <div class="exp-y small muted"><span>{{ peak | isk if peak else '0' }}</span><span>{{ (peak / 2) | isk if peak else '' }}</span><span>0</span></div>
+    <div class="exp-plot">
+      <div class="exp-bars" role="img" aria-label="ISK you were responsible for at the end of each day, last 30 days">
+        {% for d in exposure.daily %}<span class="exp-bar {{ 'today' if loop.last }}" style="height: {{ [d.pct, 1] | max if d.isk else 0 }}%" title="{{ d.day.strftime('%a %b %d') }}{{ ' (now)' if loop.last }}: {{ d.isk | isk if d.isk else 'nothing' }} in your hands"></span>{% endfor %}
+      </div>
+      {% if exposure.daily %}<div class="exp-x small muted">
+        <span>{{ exposure.daily[0].day.strftime('%b %d') }}</span><span>{{ exposure.daily[exposure.daily | length // 2].day.strftime('%b %d') }}</span><span>today</span></div>{% endif %}
+    </div>
   </div>
+  <div class="small muted exp-key">ISK in your hands at the end of each day (accepted couriers' collateral + bulk goods) · one bar per day</div>
   {% if top_exposure %}<div class="small exp-top">Most in your hands now:
     {% for cust, v in top_exposure %}<a href="/customers/{{ cust.character_id }}">{{ cust.name or cust.character_id }}</a> {{ v | isk }}{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
 </div>
@@ -60,8 +74,28 @@
 <h2>Awaiting acceptance</h2>
 {{ contract_table(outstanding, now) }}
 
+{% if bulk_jobs %}
+<h2>Bulk jobs {% if new_jobs %}<span class="new-sticker">{{ new_jobs }} new</span>{% endif %}</h2>
+<table>
+  <thead><tr><th>Job</th><th>Status</th><th class="num">To accept</th><th class="num">Accepted</th><th class="num">Volume</th><th class="num">Goods</th><th>Pay</th><th>Accept by</th></tr></thead>
+  <tbody>
+  {% for j in bulk_jobs %}{% set first = j.waiting | map(attribute='date_expired') | select | min if j.waiting else none %}
+    <tr><td><a href="/contracts/bulk/{{ j.id }}">{{ j.title or (j.customer.name if j.customer and j.customer.name else j.issuer_id) }}</a></td>
+      <td><span class="pill small">{{ j.status }}</span></td>
+      <td class="num">{{ j.waiting | length or '' }}</td>
+      <td class="num">{{ (j.live | length) - (j.waiting | length) }}</td>
+      <td class="num">{{ j.m3 | m3 }}</td>
+      <td class="num">{{ j.value_isk | isk if j.value_isk else '—' }}</td>
+      <td>{{ ('💰 ' ~ (j.upfront_isk | isk)) if j.price_mode == 'upfront' else '🧾 price after' }}</td>
+      <td class="small">{{ first | delta(now) if first else '—' }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <h2>In transit</h2>
 {{ contract_table(in_progress, now) }}
-{% if hidden_blocked %}<p class="small muted">{{ hidden_blocked }} open contract(s) from blocked issuers hidden.
-  <a href="/customers?all=1">Manage blocked issuers</a>.</p>{% endif %}
+{% if hidden_blocked %}<p class="small muted">{{ hidden_blocked }} open courier contract{{ 's' if hidden_blocked != 1 }} hidden because you blocked
+  {{ 'its issuer' if hidden_blocked == 1 else 'their issuers' }} (a customer page's <em>Block</em> button: no alerts, hidden here).
+  <a href="/customers?blocked=1">Review blocked &amp; muted customers →</a></p>{% endif %}
 {% endblock %}

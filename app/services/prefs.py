@@ -25,22 +25,23 @@ class Kind:
 KINDS: list[Kind] = [
     Kind("new_contract", "New courier received", "A new contract is assigned to the corp.", "Hauling"),
     Kind("expiring", "Unaccepted contract expiring soon",
-         "An outstanding contract expires within EXPIRY_WARNING_HOURS.", "Hauling"),
+         "An outstanding contract expires within the warning window below.", "Hauling"),
     Kind("delivery_due", "Delivery deadline approaching",
-         "An accepted contract must be delivered within EXPIRY_WARNING_HOURS.", "Hauling"),
+         "An accepted contract must be delivered within the warning window below.", "Hauling"),
     Kind("status_accepted", "Contract accepted", "Someone accepted a contract.", "Hauling"),
     Kind("status_finished", "Contract delivered", "A contract was completed.", "Hauling"),
     Kind("status_failed", "Contract failed", "A contract failed.", "Hauling"),
     Kind("status_cancelled", "Contract cancelled by issuer", "", "Hauling"),
     Kind("status_deleted", "Contract deleted by issuer", "", "Hauling"),
     Kind("status_rejected", "Contract rejected", "", "Hauling"),
-    Kind("bulk_job", "Bulk job assigned",
+    Kind("bulk_job", "Bulk job assigned, paid or delivered",
          "Item-exchange haul contracts assigned to the corp: one message per job (and once "
-         "more if it grows), with m³, pickups, value and whether it's paid upfront.",
+         "more if it grows), with m³, pickups, value and whether it's paid upfront; and "
+         "when the requester accepts your return contract.",
          "Hauling", default=False),
     Kind("bulk_expiring", "Bulk job contracts expiring soon",
-         "Some of a bulk job's contracts are still unaccepted and expire within "
-         "EXPIRY_WARNING_HOURS.", "Hauling", default=False),
+         "Some of a bulk job's contracts are still unaccepted and expire within the "
+         "warning window below.", "Hauling", default=False),
     Kind("industry_job_ready", "Watched ship or item built",
          "A manufacturing job matching the groups or keywords below is ready for delivery.",
          "Industry"),
@@ -184,6 +185,17 @@ def job_rule_match(activity_id: int, product_name: str | None, group_name: str |
     return None
 
 
+def expiry_hours(db: Session) -> int:
+    """How long before a deadline the 'expiring' / 'due' warnings fire. Set on the
+    Notifications page; until then, EXPIRY_WARNING_HOURS from the environment (24)."""
+    from app.config import get_settings
+    v = _load(db).get(PREFIX + "expiry_hours")
+    try:
+        return max(1, min(720, int(v))) if v else get_settings().expiry_warning_hours
+    except ValueError:
+        return get_settings().expiry_warning_hours
+
+
 def _set(db: Session, key: str, value: str) -> None:
     row = db.get(Setting, PREFIX + key) or Setting(key=PREFIX + key, value=value)
     row.value = value
@@ -199,6 +211,9 @@ def save(db: Session, form: dict[str, str]) -> None:
     for key in INDUSTRY_RULES:
         _set(db, f"industry:{key}", "1" if form.get(f"rule_{key}") else "0")
     _set(db, "industry:keywords", (form.get("industry_keywords") or "").strip()[:1000])
+    hours = (form.get("expiry_hours") or "").strip()
+    if hours.isdigit():
+        _set(db, "expiry_hours", str(max(1, min(720, int(hours)))))
     db.commit()
     invalidate()
 
@@ -215,4 +230,4 @@ def snapshot(db: Session) -> dict:
     return {"groups": groups,
             "rules": [(key, r.label, RULE_HELP.get(key) or ", ".join(sorted(r.groups)),
                        key in rules) for key, r in INDUSTRY_RULES.items()],
-            "keywords": keywords}
+            "keywords": keywords, "expiry_hours": expiry_hours(db)}

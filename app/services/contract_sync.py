@@ -216,8 +216,8 @@ def detect_spam(db: Session, issuer_ids: set[int]) -> list[Customer]:
 
 def queue_deadline_alerts(db: Session) -> None:
     """Warn about outstanding contracts about to expire and accepted ones nearly due."""
-    s = get_settings()
-    horizon = utcnow() + timedelta(hours=s.expiry_warning_hours)
+    from app.services.prefs import expiry_hours
+    horizon = utcnow() + timedelta(hours=expiry_hours(db))
     now = utcnow()
     open_contracts = db.scalars(
         select(Contract).where(Contract.status.in_(["outstanding", "in_progress"]),
@@ -348,6 +348,8 @@ async def sync_corporation_contracts() -> None:
                 names = await _prefetch(db, corp_id, rows, token)
 
                 results = store_batch(db, corp_id, rows, names)
+                from app.services import bulk
+                bulk.match_returns(db, corp_id, res.data)
                 state = db.get(SyncState, key)
                 state.etag, state.expires_at = etag, expires
                 log.info("Contracts synced: %d rows (couriers + bulk), %d new, %d changed",

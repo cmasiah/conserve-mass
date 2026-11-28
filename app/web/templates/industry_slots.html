@@ -8,7 +8,7 @@
     slot tooltip. Nothing = only jobs in the system you're in. -#}
 {% macro remote_tag(rm) -%}
   {%- if rm.level or rm.queued_jumps > rm.jumps -%}
-  <span class="remote-tag {{ 'queued' if not rm.level }}" title="{{ rm.name }} {{ rm.level }}: start jobs {{ rm.reach }}{{ ' · training to ' ~ rm.queued_jumps ~ ' jumps' if rm.queued_jumps > rm.jumps }}">📡</span>
+  <span class="remote-tag {{ 'queued' if not rm.level }}" title="{{ 'Remote capable' if rm.level else 'Remote capable once trained' }}: {{ rm.name }} {{ rm.level }}, start jobs {{ rm.reach }}{{ ' · training to ' ~ rm.queued_jumps ~ ' jumps' if rm.queued_jumps > rm.jumps }}">📡</span>
   {%- endif -%}
 {%- endmacro %}
 {% macro slotcell(r, cat) -%}
@@ -84,7 +84,7 @@
     </span>
   </div>
   <span class="spacer"></span>
-  <span class="small muted">Hover a slot count for the skills behind it.</span>
+  <span class="small muted">Hover a slot count for the skills behind it · 📡 = remote capable (can start jobs outside its system)</span>
 </div>
 
 {% if rows %}
