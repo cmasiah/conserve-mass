@@ -424,3 +424,25 @@ td.held .tip-row { grid-template-columns: 1fr auto 50px; white-space: normal; }
 /* Copy-to-clipboard (partials/clip.html), used on several pages */
 .clip { display: inline-flex; }
 .clip-src { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+
+/* System › ESI usage: how close each rate-limit bucket is to its cap */
+.esi-limits { margin: 12px 0; }
+.lim-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.lim-row { display: grid; grid-template-columns: 280px minmax(120px, 1fr) 250px;
+  align-items: center; gap: 12px; padding: 6px 0; }
+.lim-group { border-top: 1px solid var(--line); }
+.lim-group > summary { cursor: pointer; list-style: none; }
+.lim-group > summary::-webkit-details-marker { display: none; }
+.lim-group > summary .lim-name::before { content: "▸ "; color: var(--muted); }
+.lim-group[open] > summary .lim-name::before { content: "▾ "; }
+.lim-row.sub { padding: 3px 0; }
+.lim-row.sub .lim-name { padding-left: 18px; }
+@media (max-width: 900px) { .lim-row { grid-template-columns: 1fr; gap: 4px; } .lim-num { text-align: left; } }
+.lim-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lim-num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lim-bar { position: relative; display: block; height: 9px; background: var(--panel-2); border-radius: 5px; }
+.lim-fill { position: absolute; inset: 0 auto 0 0; background: var(--ok); border-radius: 5px; min-width: 2px; }
+.lim-bar.warm .lim-fill { background: var(--warn); }
+.lim-bar.hot .lim-fill { background: var(--bad); }
+.lim-peak { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); opacity: .7; border-radius: 1px; }
+.lim-foot { margin-top: 8px; }
