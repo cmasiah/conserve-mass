@@ -25,7 +25,10 @@ aside.side { position: sticky; top: 0; height: 100vh; display: flex; flex-direct
 .brand { font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent);
   display: flex; flex-direction: column; line-height: 1.15; font-size: 14px; }
 .brand small { color: var(--muted); font-weight: 400; letter-spacing: .08em; font-size: 11px; }
-aside nav { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; padding-right: 2px; }
+aside nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; padding-right: 2px; }
+/* Items keep their height: when every group is open the menu scrolls instead of squeezing them. */
+aside nav > *, aside.side > :not(nav) { flex-shrink: 0; }
+aside nav { scrollbar-width: thin; scrollbar-color: var(--line) transparent; overscroll-behavior: contain; }
 .nav-sec { margin-top: 6px; }
 .nav-group { display: flex; align-items: center; gap: 11px; width: 100%; height: 38px; padding: 0 12px;
   border-radius: 8px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer;
