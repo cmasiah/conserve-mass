@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/sync.html" import sync_now %}
 {% block title %}Characters · {{ APP_NAME }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/static/characters.css?v={{ ASSET_V }}">{% endblock %}
 {% macro info(title, left=False) -%}
@@ -10,6 +11,7 @@
   <h1 style="margin:0">Characters</h1>
   <span class="spacer"></span>
   <span class="small muted">{{ chars | length }} linked</span>
+  {{ sync_now(sync_feeds, "/industry/sync-now", csrf, now, back="/characters" ~ ("?tab=" ~ tab if tab != "list" else "") ~ "#chars") }}
 </div>
 
 <div class="link-grid">

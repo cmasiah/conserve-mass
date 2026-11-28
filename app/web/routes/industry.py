@@ -297,5 +297,5 @@ def sync_now(request: Request, csrf: str = Form(""), back: str = Form("/industry
     from app.jobs.scheduler import trigger_industry_now
     trigger_industry_now()
     flash(request, sync_info.pressed_message(db, "industry"))
-    return RedirectResponse(back if back.startswith("/industry") else "/industry/slots",
-                            status_code=303)
+    ok = back.startswith("/industry") or back.startswith("/characters")
+    return RedirectResponse(back if ok else "/industry/slots", status_code=303)

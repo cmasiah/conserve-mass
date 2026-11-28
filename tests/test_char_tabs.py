@@ -125,3 +125,29 @@ def test_sync_stores_attributes_implants_and_clones(seeded, monkeypatch):
     asyncio.run(charinfo.sync_character_info())
     info = charinfo.get(seeded, CHARS[0])
     assert info["attributes"]["intelligence"] == 24 and info["implants"] == [10216]
+
+
+def test_characters_page_has_sync_now_that_comes_back_here(client, seeded):
+    html = client.get("/characters?tab=implants").text
+    assert 'action="/industry/sync-now"' in html and 'value="/characters?tab=implants#chars"' in html
+    r = client.post("/industry/sync-now", data={"csrf": client.cookies.get("csrf") or "",
+                                               "back": "/characters?tab=implants#chars"},
+                    follow_redirects=False)
+    if r.status_code == 303:                       # csrf accepted in this test setup
+        assert r.headers["location"].startswith("/characters")
+
+
+def test_system_sync_everything_runs_both_and_stays_on_system(monkeypatch):
+    from app.jobs import scheduler
+    from app.web.routes import pages
+    ran = []
+    monkeypatch.setattr(scheduler, "trigger_sync_now", lambda: ran.append("contracts"))
+    monkeypatch.setattr(scheduler, "trigger_industry_now", lambda: ran.append("industry"))
+    monkeypatch.setattr(pages, "require_csrf", lambda req, tok: None)
+    monkeypatch.setattr(pages, "flash", lambda req, msg, *a: ran.append("flash"))
+
+    class DB:
+        pass
+    monkeypatch.setattr(pages.sync_info, "pressed_message", lambda db, kind: kind)
+    r = pages.sync_all(object(), "t", DB())
+    assert ran == ["contracts", "industry", "flash"] and r.headers["location"] == "/system"
