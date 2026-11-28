@@ -350,7 +350,9 @@ async def system(request: Request, db: Session = Depends(get_db)):
     return render(request, "system.html", notes=notes, syncs=syncs, backups=backups,
                   settings=s, bot_ready=bot.is_ready_for_dm(), bot_configured=bot.configured,
                   ver=await version.check(), upd=updater.status(), now=utcnow(),
-                  esi_usage=esi_usage.summary(), esi_expected=sync_info.expected_per_hour(db))
+                  esi_usage=esi_usage.summary(), esi_expected=sync_info.expected_per_hour(db),
+                  esi_limits=esi_usage.limits(),
+                  char_names={c.character_id: c.name for c in db.scalars(select(Character))})
 
 
 @router.post("/system/check-updates")

@@ -163,11 +163,7 @@
     <div class="small">{{ esi_usage.cached }} unchanged (304, half cost) · {{ esi_usage.fresh }} with new data ·
       <span class="{{ 'bad-text' if esi_usage.errors else '' }}">{{ esi_usage.errors }} error{{ 's' if esi_usage.errors != 1 }}</span></div>
     <div class="small muted" style="margin-top:6px">Errors in the last minute: {{ esi_usage.errors_last_min }} of CCP's 100 limit.</div>
-    {% if esi_usage.tight %}
-      <div class="small" style="margin-top:8px"><strong>Tightest rate-limit buckets</strong>
-        {% for t in esi_usage.tight %}<div class="mono small">{{ t.group }}: {{ t.remaining }} left of {{ t.limit }}</div>{% endfor %}
-      </div>
-    {% endif %}
+
   </div>
   <div class="card">
     <div class="label small muted">Worst case per hour, current setup</div>
@@ -190,6 +186,48 @@
       {% else %}<tr><td class="muted">No ESI calls since the app started.</td></tr>{% endfor %}
     </table>
   </div>
+</div>
+
+{% macro lim_bar(pct, peak=0, label='') -%}
+  <span class="lim-bar {{ 'hot' if pct >= 75 else ('warm' if pct >= 40 else '') }}" title="{{ label }}">
+    <span class="lim-fill" style="width: {{ pct | round(1) }}%"></span>
+    {% if peak and peak > pct %}<span class="lim-peak" style="left: {{ peak | round(1) }}%" title="Highest in the last hour: {{ peak | round(0) | int }}%"></span>{% endif %}
+  </span>
+{%- endmacro %}
+<div class="card esi-limits">
+  <div class="lim-head">
+    <div class="label small muted">How close to CCP's limits</div>
+    <span class="tip info-tip" tabindex="0"><span class="info-dot" aria-label="How the limits work">i</span>
+      <span class="tip-body tip-text tip-left"><span class="tip-head">How ESI limits work</span>
+        <span class="tip-para">Routes are grouped. Each group has a bucket of tokens (e.g. 150 per 15 min) <strong>per character</strong> for logged-in routes, per IP for public ones.</span>
+        <span class="tip-para">A fresh answer costs 2 tokens, an unchanged one (304) 1, an error 5, a CCP server error 0. Tokens come back 15 minutes after they're spent.</span>
+        <span class="tip-para">An empty bucket gets 429s until tokens return; the app slows down at 10% left. Separately, more than 100 errors a minute from one IP gets everything blocked (420).</span>
+      </span></span>
+  </div>
+  <div class="lim-row">
+    <span class="lim-name">Errors, last minute <span class="muted small">· all routes, per IP</span></span>
+    {{ lim_bar(esi_limits.errors_pct) }}
+    <span class="lim-num small">{{ esi_limits.errors_min }} / 100</span>
+  </div>
+  {% for g in esi_limits.groups %}{% set top = g.buckets[0] %}
+  <details class="lim-group">
+    <summary class="lim-row">
+      <span class="lim-name">{{ g.families | join(', ') }} <span class="muted small mono">{{ g.group }}</span></span>
+      {{ lim_bar(g.worst_pct, g.peak_pct, 'Busiest character, last ' ~ g.window_label) }}
+      <span class="lim-num small">{{ top.used }} / {{ g.max }} <span class="muted">per {{ g.window_label }}{% if g.buckets | length > 1 %} · busiest of {{ g.buckets | length }}{% endif %}</span></span>
+    </summary>
+    {% for b in g.buckets %}
+      <div class="lim-row sub">
+        <span class="lim-name small">{{ char_names.get(b.who) or ('Public (this server\'s IP)' if not b.who else b.who) }}</span>
+        {{ lim_bar(b.pct, b.peak_pct) }}
+        <span class="lim-num small">{{ b.used }} / {{ g.max }} <span class="muted">· {{ b.calls }} call{{ 's' if b.calls != 1 }}</span></span>
+      </div>
+    {% endfor %}
+  </details>
+  {% else %}
+  <div class="small muted">No rate-limited calls yet since the app started. Groups appear here as ESI reports them.</div>
+  {% endfor %}
+  <div class="small muted lim-foot">Bar = tokens spent in the current window by the busiest character (tokens return as the window slides). Tick = the highest it reached in the last hour. Click a group for each character.</div>
 </div>
 
 {% if esi_usage.failures %}

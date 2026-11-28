@@ -30,6 +30,7 @@ def test_system_page_shows_running_updater():
     html = _render("system.html", ver=ver, upd=upd, settings=settings, notes=[], syncs=[],
                    backups=[], bot_ready=True, bot_configured=True, now=now,
                    esi_usage=__import__("app.esi.usage", fromlist=["summary"]).summary(),
+                   esi_limits=__import__("app.esi.usage", fromlist=["limits"]).limits(), char_names={},
                    esi_expected=[])
     assert ">active<" in html
     assert "not set up" not in html
@@ -52,15 +53,22 @@ def test_system_page_rollback_list_and_folded_notifications():
     from app.esi import usage
     usage.reset()
     usage.record("/characters/1/skills/", 401, {}, body='{"error": "token is expired"}')
+    usage.record("/characters/7/industry/jobs/", 200,
+                 {"X-Ratelimit-Group": "char-industry", "X-Ratelimit-Limit": "150/15m",
+                  "X-Ratelimit-Remaining": "100"}, who=7)
     for watcher, disabled in ((1, True), (2, False)):
         upd = NS(installed=True, watcher_version=watcher, last_seen=now, pending=False,
                  last_result=None, last_finished=None, last_started=None, log_tail="")
         html = _render("system.html", ver=ver, upd=upd, settings=settings, notes=[],
                        syncs=[], backups=[], bot_ready=True, bot_configured=True, now=now,
-                       esi_usage=usage.summary(), esi_expected=[])
+                       esi_usage=usage.summary(), esi_expected=[],
+                       esi_limits=usage.limits(), char_names={7: "Pilot Seven"})
         btn = re.search(r'<button class="small"([^>]*)>Roll back to this</button>', html)
         assert btn and (("disabled" in btn.group(1)) == disabled)
         assert 'value="sha-' + "a" * 40 + '"' in html
+    # Rate-limit bars: the group, the busiest character and its share of the bucket.
+    assert "How close to CCP's limits" in html and "char-industry" in html
+    assert "Pilot Seven" in html and "2 / 150" in html and "lim-peak" in html
     # ESI errors are listed with ESI's own message and what it means.
     assert "Recent ESI errors" in html and "token is expired" in html and "Re-add it" in html
     usage.reset()

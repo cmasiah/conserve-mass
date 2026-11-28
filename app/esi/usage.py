@@ -53,6 +53,42 @@ class Call:
     group: str | None
     remaining: int | None
     limit: str | None
+    who: int = 0          # character id whose token was used; 0 = public (per IP)
+
+
+def cost(status: int) -> int:
+    """Tokens a response takes from its bucket (CCP: 2xx 2, 3xx 1, 4xx 5 except 429, 5xx 0)."""
+    if 200 <= status < 300:
+        return 2
+    if 300 <= status < 400:
+        return 1
+    if 400 <= status < 500 and status != 429:
+        return 5
+    return 0
+
+
+def parse_limit(limit: str | None) -> tuple[int, int] | None:
+    """'150/15m' -> (150, 900 seconds)."""
+    m = re.match(r"^\s*(\d+)\s*/\s*(\d+)\s*([smhd])\s*$", limit or "")
+    if not m:
+        return None
+    unit = {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(3)]
+    return int(m.group(1)), int(m.group(2)) * unit
+
+
+def who_from_token(token: str | None) -> int:
+    """The character in an ESI access token (JWT 'sub' = CHARACTER:EVE:<id>), unverified:
+    only used to tell rate-limit buckets apart."""
+    if not token:
+        return 0
+    try:
+        import base64
+        import json
+        part = token.split(".")[1]
+        data = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        return int(str(data.get("sub", "")).rsplit(":", 1)[-1])
+    except (IndexError, ValueError, TypeError):
+        return 0
 
 
 _calls: deque[Call] = deque(maxlen=50_000)
@@ -98,13 +134,14 @@ def _message(body: str) -> str:
     return " ".join(text.split())[:240]
 
 
-def record(path: str, status: int, headers, method: str = "GET", body: str = "") -> None:
+def record(path: str, status: int, headers, method: str = "GET", body: str = "",
+           who: int = 0) -> None:
     if status >= 400:
         _failures.append(Failure(time.time(), method, path, family(path), status, _message(body)))
     rem = headers.get("X-Ratelimit-Remaining")
     _calls.append(Call(time.time(), family(path), status, headers.get("X-Ratelimit-Group"),
                        int(rem) if rem and rem.isdigit() else None,
-                       headers.get("X-Ratelimit-Limit")))
+                       headers.get("X-Ratelimit-Limit"), who))
 
 
 def reset() -> None:
@@ -119,6 +156,48 @@ def recent_failures(limit: int = 20) -> list[dict]:
              "status": f.status, "message": f.message,
              "hint": STATUS_HINTS.get(f.status, "")}
             for f in reversed(list(_failures)[-limit:])]
+
+
+def limits(now: float | None = None) -> dict:
+    """How close each rate-limit bucket is to its cap right now.
+
+    CCP gives each route group one bucket per application + character (per IP for public
+    routes), and a spent token comes back once the window (e.g. 15 min) has passed. Only
+    this app spends from its own buckets, so the tokens it spent in the last window are
+    the bucket's real usage. Also the old error limit: 100 errors a minute per IP."""
+    now = now or time.time()
+    calls = _recent(now)
+    groups: dict[str, dict] = {}
+    for c in calls:
+        lim = parse_limit(c.limit)
+        if not c.group or not lim:
+            continue
+        g = groups.setdefault(c.group, {"group": c.group, "max": lim[0], "window": lim[1],
+                                        "families": set(), "buckets": {}})
+        g["max"], g["window"] = lim
+        g["families"].add(c.family)
+        b = g["buckets"].setdefault(c.who, {"who": c.who, "used": 0, "peak": 0, "calls": 0})
+        if c.at >= now - lim[1]:
+            b["used"] += cost(c.status)
+            b["calls"] += 1
+        if c.remaining is not None:
+            b["peak"] = max(b["peak"], lim[0] - c.remaining)
+    out = []
+    for g in groups.values():
+        buckets = sorted(g["buckets"].values(), key=lambda b: -max(b["used"], 0))
+        for b in buckets:
+            b["pct"] = min(100.0, 100 * b["used"] / g["max"]) if g["max"] else 0
+            b["peak_pct"] = min(100.0, 100 * b["peak"] / g["max"]) if g["max"] else 0
+        worst = max((b["pct"] for b in buckets), default=0)
+        peak = max((b["peak_pct"] for b in buckets), default=0)
+        w = g["window"]
+        out.append({"group": g["group"], "max": g["max"], "window": w,
+                    "window_label": f"{w // 3600}h" if w % 3600 == 0 else f"{w // 60} min",
+                    "families": sorted(g["families"]), "buckets": buckets,
+                    "worst_pct": worst, "peak_pct": peak})
+    out.sort(key=lambda g: (-max(g["worst_pct"], g["peak_pct"]), g["group"]))
+    errors = sum(1 for c in calls if c.status >= 400 and c.at >= now - 60)
+    return {"groups": out, "errors_min": errors, "errors_pct": min(100.0, errors)}
 
 
 def _recent(now: float | None = None) -> list[Call]:
